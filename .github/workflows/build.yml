@@ -1,0 +1,71 @@
+name: Build — VerificadorCitacoes.exe
+
+on:
+  # Dispara manualmente pela aba "Actions" do GitHub
+  workflow_dispatch:
+  # Dispara automaticamente ao criar uma tag versão (ex: v1.0)
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    name: Build no Windows
+    runs-on: windows-latest
+
+    steps:
+      # 1. Baixa o código
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Instala Python 3.11
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Instala dependências + PyInstaller
+      - name: Instalar dependências
+        working-directory: verificador_citacoes
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # 4. Constrói o executável
+      - name: Construir .exe
+        working-directory: verificador_citacoes
+        run: pyinstaller verificador.spec --clean --noconfirm
+
+      # 5. Salva o .exe como artefato (disponível na aba Actions)
+      - name: Salvar artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: VerificadorCitacoes-Windows
+          path: verificador_citacoes/dist/VerificadorCitacoes.exe
+          retention-days: 30
+
+      # 6. Se for um push de tag (v*), cria um Release com o .exe
+      - name: Criar Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Verificador de Citações ${{ github.ref_name }}"
+          body: |
+            ## Download
+
+            Baixe o arquivo **VerificadorCitacoes.exe** abaixo.
+
+            ### Como usar
+            1. Baixe `VerificadorCitacoes.exe`
+            2. Clique duas vezes para abrir
+            3. O navegador abrirá automaticamente em `http://localhost:8000`
+            4. Faça o upload da sua dissertação e dos arquivos de referência
+            5. Informe sua chave da API Claude e clique em **Iniciar Análise**
+
+            ### Requisitos
+            - Windows 10 ou superior
+            - Conexão com a internet (para a API Claude)
+          files: verificador_citacoes/dist/VerificadorCitacoes.exe
+          draft: false
+          prerelease: false

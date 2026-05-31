@@ -18,7 +18,14 @@ from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Quando empacotado com PyInstaller, recursos ficam em sys._MEIPASS
+if getattr(sys, "frozen", False):
+    _BASE = Path(sys._MEIPASS)
+    sys.path.insert(0, str(_BASE))
+else:
+    _BASE = Path(__file__).parent
+
+sys.path.insert(0, str(_BASE))
 
 app = FastAPI(title="Verificador de Citações Acadêmicas")
 
@@ -32,7 +39,7 @@ _jobs: dict[str, dict] = {}   # job_id → {queue, tmpdir, status, relatorio_dir
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    html_path = Path(__file__).parent / "static" / "index.html"
+    html_path = _BASE / "static" / "index.html"
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
