@@ -43,6 +43,11 @@ async def index():
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/ping")
+async def ping():
+    return {"ok": True}
+
+
 @app.get("/manifest.json")
 async def manifest():
     return FileResponse(_BASE / "static" / "manifest.json", media_type="application/manifest+json")
