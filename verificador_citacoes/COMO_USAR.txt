@@ -1,0 +1,100 @@
+╔══════════════════════════════════════════════════════════════════╗
+║          VERIFICADOR DE CITAÇÕES — GUIA DE USO RÁPIDO          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+PRÉ-REQUISITOS
+──────────────
+• Python 3.11 ou superior  (python --version)
+• pip (gerenciador de pacotes)
+• Chave de API Claude       (https://console.anthropic.com)
+• Pen drive conectado com:
+    mestrado/dissertacao final 1.docx
+    fusion centers/           ← pasta com os PDFs/docx das obras
+
+
+PASSO 1 — Instalar dependências
+─────────────────────────────────
+  pip install -r requirements.txt
+
+
+PASSO 2 — Configurar caminhos e chave de API
+──────────────────────────────────────────────
+  Copie .env.exemplo para .env e edite:
+
+    cp .env.exemplo .env   (Linux/Mac)
+    copy .env.exemplo .env (Windows)
+
+  Abra o arquivo .env e preencha:
+    ANTHROPIC_API_KEY=sk-ant-...
+    DISSERTACAO_PATH=<caminho completo do .docx>
+    REFERENCIAS_FOLDER=<caminho completo da pasta fusion centers>
+
+  Exemplos de DISSERTACAO_PATH:
+    Windows : E:\mestrado\dissertacao final 1.docx
+    Linux   : /media/usuario/PENDRIVE/mestrado/dissertacao final 1.docx
+    Mac     : /Volumes/PENDRIVE/mestrado/dissertacao final 1.docx
+
+
+PASSO 3 — Executar
+───────────────────
+  # Execução normal (com verificação por IA):
+  python main.py
+
+  # Passando caminhos diretamente pela linha de comando:
+  python main.py \
+    --dissertacao "E:\mestrado\dissertacao final 1.docx" \
+    --referencias "E:\fusion centers" \
+    --saida meu_relatorio
+
+  # Sem verificação de IA (apenas cruzamento de citações × referências):
+  python main.py --sem-verificacao
+
+
+PASSO 4 — Ler o relatório
+──────────────────────────
+  Os arquivos de saída ficam em relatorio_saida/ (ou --saida):
+    relatorio.html  ← Abra no navegador (mais fácil de ler)
+    relatorio.txt   ← Versão texto simples
+    relatorio.json  ← Dados estruturados para análise posterior
+
+
+O QUE O RELATÓRIO CONTÉM
+─────────────────────────
+  SEÇÃO 1 — Obras citadas no texto mas ausentes da lista de referências
+            → você precisa adicionar a referência completa no formato ABNT
+
+  SEÇÃO 2 — Referências na lista que não foram citadas no texto
+            → provavelmente devem ser removidas
+
+  SEÇÃO 3 — Citações que não refletem fielmente o conteúdo da fonte
+            → a IA identificou divergência entre o que você afirmou e
+              o que a obra realmente diz
+
+  SEÇÃO 4 — Citações cujos arquivos não foram encontrados na pasta
+            → coloque os PDFs/docx das obras na pasta "fusion centers"
+
+  SEÇÃO 5 — Citações verificadas e consideradas corretas
+
+
+DICAS
+──────
+• Nomes dos arquivos na pasta "fusion centers" devem conter o sobrenome
+  do(s) autor(es) e o ano, ex.: SILVA_2020_titulo.pdf ou silva2020.pdf
+• Se a pasta tiver subpastas, elas também serão varridas automaticamente
+• Formatos suportados: .pdf  .docx  .doc  .txt
+• A verificação por IA pode demorar alguns minutos dependendo da
+  quantidade de citações — cada uma é processada individualmente
+
+
+PROBLEMAS COMUNS
+─────────────────
+  "Seção REFERÊNCIAS não encontrada"
+    → O título da seção na dissertação deve ser exatamente "REFERÊNCIAS"
+      ou "REFERÊNCIAS BIBLIOGRÁFICAS" (todo em maiúsculas)
+
+  "0 citações encontradas"
+    → As citações devem seguir o padrão ABNT:
+      (SOBRENOME, ANO) ou SOBRENOME (ANO)
+
+  Erro de API
+    → Verifique se a ANTHROPIC_API_KEY está correta e tem crédito
