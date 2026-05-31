@@ -180,7 +180,7 @@ def _rodar_analise(
         _enviar(loop, queue, {"tipo": tipo, "msg": msg})
 
     try:
-        if not sem_verificacao and not api_key.strip():
+        if not api_key.strip():
             raise ValueError("Chave da API Claude não informada. Informe a chave ou ative 'Apenas cruzamento'.")
 
         os.environ["ANTHROPIC_API_KEY"] = api_key
@@ -191,32 +191,34 @@ def _rodar_analise(
         cfg.REFERENCIAS_FOLDER  = refs_dir
         cfg.ANTHROPIC_API_KEY   = api_key
 
-        from modules.dissertation_parser import DissertationParser
+        from modules.ai_extractor import AIExtractor
         from modules.reference_reader import ReferenceReader
         from modules.citation_verifier import CitationVerifier, Veredicto
         from modules.report_generator import ReportGenerator
 
-        # ── Etapa 1 ──────────────────────────────────────────────────────
-        log("📄 Lendo a dissertação…", "etapa")
-        parser = DissertationParser(diss_path)
-        parser.carregar()
-        citacoes    = parser.extrair_citacoes()
-        referencias = parser.extrair_referencias()
-        log(f"   {len(citacoes)} citações | {len(referencias)} referências encontradas")
+        extractor = AIExtractor(api_key=api_key)
 
-        # ── Etapa 2 ──────────────────────────────────────────────────────
+        # ── Etapa 1 — Claude lê e entende a dissertação ──────────────────
+        log("📄 Claude lendo e interpretando a dissertação…", "etapa")
+        log("   (isso pode levar 20–40 segundos para dissertações longas)")
+        dados = extractor.extrair_de_docx(diss_path, log_fn=lambda m: log(m))
+        citacoes, referencias = extractor.para_objetos(dados)
+        log(f"   {len(citacoes)} citações | {len(referencias)} referências identificadas")
+
+        if len(citacoes) == 0 and len(referencias) == 0:
+            log("   ⚠ Nenhum conteúdo encontrado — verifique se o arquivo .docx tem texto selecionável (não é imagem escaneada)", "warn")
+
+        # ── Etapa 2 — Cruza citações com referências ─────────────────────
         log("🔗 Cruzando citações com a lista de referências…", "etapa")
-        cruzamento       = parser.cruzar_citacoes_referencias()
+        cruzamento       = extractor.cruzar(citacoes, referencias)
         citadas_sem_ref  = cruzamento["citadas_sem_referencia"]
         refs_sem_citacao = cruzamento["referenciadas_sem_citacao"]
         pareamentos      = cruzamento["pareamentos"]
         log(f"   {len(pareamentos)} pares | {len(citadas_sem_ref)} sem referência | {len(refs_sem_citacao)} ref. sem citação")
 
-        # ── Etapa 3 ──────────────────────────────────────────────────────
+        # ── Etapa 3 — Lê os documentos-fonte ────────────────────────────
         log("📂 Lendo os documentos da pasta de referências…", "etapa")
         reader = ReferenceReader(refs_dir)
-
-        # Versão com callback de progresso
         from config import EXTENSOES_SUPORTADAS
         arquivos = [
             f for f in Path(refs_dir).rglob("*")
@@ -224,13 +226,13 @@ def _rodar_analise(
         ]
         log(f"   {len(arquivos)} arquivo(s) encontrado(s)")
         for arq in arquivos:
-            doc = reader._ler_arquivo(arq)
-            if doc:
-                reader.documentos.append(doc)
+            doc_ref = reader._ler_arquivo(arq)
+            if doc_ref:
+                reader.documentos.append(doc_ref)
                 log(f"   ✓ {arq.name}")
         reader._construir_indice()
 
-        # ── Etapa 4 ──────────────────────────────────────────────────────
+        # ── Etapa 4 — Verificação semântica por IA ───────────────────────
         verificacoes = []
         if not sem_verificacao and pareamentos:
             log(f"🤖 Verificando {len(pareamentos)} citações com IA…", "etapa")
