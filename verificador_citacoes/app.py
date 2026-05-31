@@ -62,8 +62,8 @@ async def icon(size: str):
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
     referencias: list[UploadFile] = File(...),
-    api_key: str = Form(...),
-    sem_verificacao: bool = Form(False),
+    api_key: str = Form(""),
+    sem_verificacao: str = Form("false"),
 ):
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
@@ -86,11 +86,14 @@ async def iniciar_analise(
         dest = refs_dir / arq.filename
         dest.write_bytes(await arq.read())
 
+    # Converte sem_verificacao (vem como string do FormData JS)
+    sem_verif_bool = str(sem_verificacao).lower() in ("true", "1", "yes")
+
     # Dispara análise em thread separada (código síncrono)
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise,
-        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verificacao, loop),
+        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verif_bool, loop),
         daemon=True,
     ).start()
 
@@ -177,6 +180,9 @@ def _rodar_analise(
         _enviar(loop, queue, {"tipo": tipo, "msg": msg})
 
     try:
+        if not sem_verificacao and not api_key.strip():
+            raise ValueError("Chave da API Claude não informada. Informe a chave ou ative 'Apenas cruzamento'.")
+
         os.environ["ANTHROPIC_API_KEY"] = api_key
 
         # ── imports locais para não poluir escopo global ──
