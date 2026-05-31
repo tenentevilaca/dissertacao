@@ -43,6 +43,16 @@ async def index():
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(_BASE / "static" / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/icon-{size}.png")
+async def icon(size: str):
+    return FileResponse(_BASE / "static" / f"icon-{size}.png", media_type="image/png")
+
+
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
