@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: verificador-citacoes
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r verificador_citacoes/requirements.txt
+    startCommand: cd verificador_citacoes && uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

@@ -1,71 +1,75 @@
 name: Build — VerificadorCitacoes.exe
 
 on:
-  # Dispara manualmente pela aba "Actions" do GitHub
   workflow_dispatch:
-  # Dispara automaticamente ao criar uma tag versão (ex: v1.0)
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+      - master
 
 jobs:
   build-windows:
-    name: Build no Windows
+    name: Gerar .exe no Windows
     runs-on: windows-latest
 
     steps:
-      # 1. Baixa o código
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Instala Python 3.11
-      - name: Configurar Python
+      - name: Configurar Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      # 3. Instala dependências + PyInstaller
-      - name: Instalar dependências
+      - name: Instalar dependências + PyInstaller
         working-directory: verificador_citacoes
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4. Constrói o executável
-      - name: Construir .exe
+      - name: Construir VerificadorCitacoes.exe
         working-directory: verificador_citacoes
         run: pyinstaller verificador.spec --clean --noconfirm
 
-      # 5. Salva o .exe como artefato (disponível na aba Actions)
-      - name: Salvar artefato
+      - name: Verificar tamanho do executável
+        run: |
+          $size = (Get-Item "verificador_citacoes/dist/VerificadorCitacoes.exe").length / 1MB
+          Write-Host "Tamanho: $([math]::Round($size, 1)) MB"
+
+      # Sempre salva como artefato (disponível por 90 dias, download direto pelo GitHub)
+      - name: Salvar artefato para download
         uses: actions/upload-artifact@v4
         with:
           name: VerificadorCitacoes-Windows
           path: verificador_citacoes/dist/VerificadorCitacoes.exe
-          retention-days: 30
+          retention-days: 90
 
-      # 6. Se for um push de tag (v*), cria um Release com o .exe
-      - name: Criar Release
+      # Ao criar tag v*, publica Release com link permanente e público
+      - name: Publicar Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: "Verificador de Citações ${{ github.ref_name }}"
           body: |
-            ## Download
+            ## ⬇️ Download
 
-            Baixe o arquivo **VerificadorCitacoes.exe** abaixo.
+            Clique em **VerificadorCitacoes.exe** abaixo para baixar.
+
+            ---
 
             ### Como usar
             1. Baixe `VerificadorCitacoes.exe`
-            2. Clique duas vezes para abrir
-            3. O navegador abrirá automaticamente em `http://localhost:8000`
-            4. Faça o upload da sua dissertação e dos arquivos de referência
-            5. Informe sua chave da API Claude e clique em **Iniciar Análise**
+            2. Clique duas vezes — o navegador abre sozinho
+            3. Faça o upload da sua dissertação e das obras de referência
+            4. Informe sua chave da API Claude
+            5. Clique em **Iniciar Análise**
 
             ### Requisitos
             - Windows 10 ou superior
-            - Conexão com a internet (para a API Claude)
+            - Conexão com a internet (para a verificação por IA)
+            - Nenhuma instalação adicional necessária
           files: verificador_citacoes/dist/VerificadorCitacoes.exe
-          draft: false
-          prerelease: false
