@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verificador de Citações Acadêmicas</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --azul:    #1a3a5c;
+  --azul2:   #2563eb;
+  --verde:   #16a34a;
+  --amarelo: #d97706;
+  --vermelho:#dc2626;
+  --cinza:   #64748b;
+  --fundo:   #f1f5f9;
+  --branco:  #ffffff;
+  --borda:   #e2e8f0;
+  --sombra:  0 2px 12px rgba(0,0,0,.08);
+}
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--fundo);
+  color: #1e293b;
+  min-height: 100vh;
+}
+
+/* ── Header ──────────────────────────────────────────────── */
+header {
+  background: var(--azul);
+  color: #fff;
+  padding: 18px 32px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+header svg { flex-shrink: 0; }
+header h1  { font-size: 1.3rem; font-weight: 700; }
+header p   { font-size: .85rem; opacity: .75; margin-top: 2px; }
+
+/* ── Layout ──────────────────────────────────────────────── */
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+
+/* ── Steps indicator ─────────────────────────────────────── */
+.steps {
+  display: flex;
+  gap: 0;
+  margin-bottom: 32px;
+  background: var(--branco);
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--borda);
+}
+.step {
+  flex: 1;
+  padding: 14px 8px;
+  text-align: center;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--cinza);
+  cursor: pointer;
+  transition: background .2s, color .2s;
+  border-right: 1px solid var(--borda);
+  user-select: none;
+}
+.step:last-child { border-right: none; }
+.step .num {
+  display: block;
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.step.ativo    { background: var(--azul); color: #fff; }
+.step.completo { background: #dbeafe; color: var(--azul2); }
+
+/* ── Cards ───────────────────────────────────────────────── */
+.card {
+  background: var(--branco);
+  border-radius: 12px;
+  border: 1px solid var(--borda);
+  box-shadow: var(--sombra);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+.card h2 {
+  font-size: 1.05rem;
+  color: var(--azul);
+  margin-bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Drop zones ───────────────────────────────────────────── */
+.dropzone {
+  border: 2px dashed var(--borda);
+  border-radius: 10px;
+  padding: 32px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  position: relative;
+}
+.dropzone:hover, .dropzone.drag-over {
+  border-color: var(--azul2);
+  background: #eff6ff;
+}
+.dropzone input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.dropzone .icon { font-size: 2.5rem; margin-bottom: 8px; }
+.dropzone p     { color: var(--cinza); font-size: .9rem; margin-top: 4px; }
+.dropzone strong { color: var(--azul2); }
+
+.file-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #dbeafe;
+  color: var(--azul2);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: .82rem;
+  margin: 6px 4px 0;
+  font-weight: 600;
+}
+.file-badge button {
+  background: none; border: none; cursor: pointer;
+  color: #93c5fd; font-size: 1rem; line-height: 1;
+  padding: 0 0 0 2px;
+}
+.file-badge button:hover { color: var(--vermelho); }
+#badges-ref { margin-top: 10px; min-height: 28px; }
+
+/* ── Form fields ──────────────────────────────────────────── */
+label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px; color: #334155; }
+input[type=password], input[type=text] {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  font-size: .95rem;
+  transition: border-color .2s;
+  background: var(--fundo);
+}
+input:focus { outline: none; border-color: var(--azul2); background: #fff; }
+
+.toggle-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 0; border-top: 1px solid var(--borda); margin-top: 18px;
+}
+.toggle {
+  position: relative; width: 44px; height: 24px;
+  flex-shrink: 0; cursor: pointer;
+}
+.toggle input { display: none; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: #cbd5e1; border-radius: 12px;
+  transition: background .2s;
+}
+.toggle input:checked ~ .toggle-track { background: var(--azul2); }
+.toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; background: #fff;
+  border-radius: 50%; transition: left .2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+.toggle input:checked ~ .toggle-thumb { left: 23px; }
+.toggle-label { font-size: .88rem; color: #475569; }
+
+/* ── Buttons ──────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 22px;
+  border-radius: 8px;
+  font-weight: 700; font-size: .9rem;
+  cursor: pointer; border: none;
+  transition: transform .1s, opacity .2s;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary   { background: var(--azul); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #243f6a; }
+.btn-success   { background: var(--verde); color: #fff; }
+.btn-success:hover { background: #15803d; }
+.btn-outline   { background: transparent; color: var(--azul); border: 2px solid var(--azul); }
+.btn-outline:hover { background: #eff6ff; }
+.btn-sm        { padding: 7px 14px; font-size: .82rem; }
+
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; margin-top: 22px; }
+
+/* ── Log terminal ─────────────────────────────────────────── */
+#log-box {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 10px;
+  padding: 18px 20px;
+  font-family: 'Courier New', monospace;
+  font-size: .82rem;
+  line-height: 1.7;
+  max-height: 380px;
+  overflow-y: auto;
+  min-height: 120px;
+}
+.log-info    { color: #94a3b8; }
+.log-etapa   { color: #60a5fa; font-weight: bold; }
+.log-ok      { color: #4ade80; }
+.log-warn    { color: #fbbf24; }
+.log-erro    { color: #f87171; }
+
+/* ── Progress bar ─────────────────────────────────────────── */
+.progress-wrap { background: #e2e8f0; border-radius: 8px; height: 8px; margin: 14px 0; overflow: hidden; }
+.progress-bar  {
+  height: 100%; background: var(--azul2);
+  border-radius: 8px;
+  transition: width .4s;
+  width: 0%;
+}
+
+/* ── Resumo (summary cards) ───────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.stat-card {
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  border: 1px solid var(--borda);
+}
+.stat-card strong { display: block; font-size: 2rem; font-weight: 800; }
+.stat-card span   { font-size: .78rem; color: var(--cinza); margin-top: 2px; display: block; }
+.stat-correto   { background: #f0fdf4; color: var(--verde); }
+.stat-incorreto { background: #fef2f2; color: var(--vermelho); }
+.stat-parcial   { background: #fffbeb; color: var(--amarelo); }
+.stat-neutro    { background: #f8fafc; color: var(--cinza); }
+.stat-aviso     { background: #eff6ff; color: var(--azul2); }
+
+/* ── Download área ────────────────────────────────────────── */
+.download-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.dl-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 16px; border-radius: 8px;
+  font-size: .85rem; font-weight: 600; text-decoration: none;
+  border: 2px solid transparent; cursor: pointer; transition: opacity .2s;
+}
+.dl-btn:hover { opacity: .85; }
+.dl-html { background: var(--azul); color: #fff; }
+.dl-txt  { background: #475569; color: #fff; }
+.dl-json { background: #7c3aed; color: #fff; }
+
+/* ── Seções ocultas ───────────────────────────────────────── */
+.secao { display: none; }
+.secao.ativa { display: block; }
+
+/* ── Spinner ──────────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  width: 22px; height: 22px;
+  border: 3px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: inline-block;
+}
+
+/* ── Responsivo ───────────────────────────────────────────── */
+@media (max-width: 600px) {
+  header { padding: 14px 16px; }
+  header h1 { font-size: 1rem; }
+  main { padding: 16px 10px 40px; }
+  .card { padding: 18px; }
+  .step { font-size: .68rem; padding: 10px 4px; }
+  .stats-grid { grid-template-columns: repeat(3, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+    <rect width="36" height="36" rx="8" fill="rgba(255,255,255,.15)"/>
+    <path d="M9 10h18M9 16h12M9 22h14M9 28h10" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="28" cy="26" r="5" fill="#60a5fa"/>
+    <path d="M26 26l1.5 1.5L30 24" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <div>
+    <h1>Verificador de Citações Acadêmicas</h1>
+    <p>ABNT · Verificação semântica por IA · Relatório automático</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- Steps -->
+  <div class="steps">
+    <div class="step ativo" id="nav-1" onclick="irPara(1)">
+      <span class="num">1</span>Dissertação
+    </div>
+    <div class="step" id="nav-2" onclick="irPara(2)">
+      <span class="num">2</span>Referências
+    </div>
+    <div class="step" id="nav-3" onclick="irPara(3)">
+      <span class="num">3</span>Configurar
+    </div>
+    <div class="step" id="nav-4" onclick="irPara(4)">
+      <span class="num">4</span>Analisar
+    </div>
+    <div class="step" id="nav-5" onclick="irPara(5)">
+      <span class="num">5</span>Relatório
+    </div>
+  </div>
+
+  <!-- ── Passo 1 : Dissertação ─────────────────────────────────── -->
+  <div class="secao ativa" id="passo-1">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Arquivo da Dissertação
+      </h2>
+      <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
+        Carregue o arquivo <strong>.docx</strong> da sua dissertação. A ferramenta irá identificar
+        automaticamente as citações no texto e a lista de referências.
+      </p>
+
+      <div class="dropzone" id="drop-diss">
+        <input type="file" id="file-diss" accept=".docx" onchange="selecionarDiss(this)">
+        <div class="icon">📄</div>
+        <strong>Clique ou arraste o arquivo aqui</strong>
+        <p>Formato aceito: <code>.docx</code> (Word)</p>
+      </div>
+      <div id="badge-diss"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="irPara(2)" id="btn-prox-1" disabled>
+          Próximo →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Passo 2 : Referências ─────────────────────────────────── -->
+  <div class="secao" id="passo-2">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        Arquivos das Obras Referenciadas
+      </h2>
+      <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
+        Carregue os arquivos (<strong>PDF, docx, txt</strong>) das obras que aparecem nas suas referências.
+        Você pode selecionar múltiplos arquivos de uma vez.
+      </p>
+
+      <div class="dropzone" id="drop-ref">
+        <input type="file" id="file-ref" multiple accept=".pdf,.docx,.doc,.txt"
+               onchange="selecionarRefs(this)">
+        <div class="icon">📚</div>
+        <strong>Clique ou arraste os arquivos aqui</strong>
+        <p>Formatos: <code>.pdf</code> · <code>.docx</code> · <code>.txt</code> · múltiplos arquivos</p>
+      </div>
+      <div id="badges-ref"></div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="irPara(1)">← Voltar</button>
+        <button class="btn btn-primary" onclick="irPara(3)" id="btn-prox-2" disabled>
+          Próximo →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Passo 3 : Configuração ────────────────────────────────── -->
+  <div class="secao" id="passo-3">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>
+        Configurações
+      </h2>
+
+      <label for="apikey">Chave da API Claude (Anthropic)</label>
+      <input type="password" id="apikey" placeholder="sk-ant-…"
+             oninput="validarConfig()" autocomplete="off">
+      <p style="font-size:.78rem;color:var(--cinza);margin-top:6px;">
+        Obtenha sua chave em
+        <a href="https://console.anthropic.com" target="_blank" style="color:var(--azul2)">console.anthropic.com</a>.
+        Ela não é armazenada — usada apenas durante esta análise.
+      </p>
+
+      <div class="toggle-row">
+        <label class="toggle">
+          <input type="checkbox" id="toggle-sem-ia" onchange="validarConfig()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+        <span class="toggle-label">
+          <strong>Apenas cruzamento</strong> — pular verificação semântica por IA
+          <br><small style="color:var(--cinza)">Mais rápido, não consome créditos da API, mas não analisa se as citações refletem a fonte.</small>
+        </span>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="irPara(2)">← Voltar</button>
+        <button class="btn btn-primary" onclick="irPara(4)" id="btn-prox-3" disabled>
+          Iniciar Análise →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Passo 4 : Análise ──────────────────────────────────────── -->
+  <div class="secao" id="passo-4">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Análise em Andamento
+      </h2>
+      <div class="progress-wrap"><div class="progress-bar" id="prog-bar"></div></div>
+      <p id="prog-label" style="font-size:.82rem;color:var(--cinza);margin-bottom:12px;"></p>
+      <div id="log-box"></div>
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn btn-outline" id="btn-cancelar" onclick="irPara(1)" style="display:none">← Recomeçar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Passo 5 : Relatório ────────────────────────────────────── -->
+  <div class="secao" id="passo-5">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Relatório Gerado
+      </h2>
+      <div class="stats-grid" id="stats-grid"></div>
+
+      <p style="font-size:.88rem;color:var(--cinza);margin-bottom:12px;">Baixe o relatório no formato que preferir:</p>
+      <div class="download-row" id="download-row"></div>
+
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--borda);">
+        <button class="btn btn-outline" onclick="reiniciar()">🔄 Nova Análise</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── Estado da aplicação ──────────────────────────────────────────────────
+const estado = {
+  passo:   1,
+  fileDiss: null,
+  fileRefs: [],
+  jobId:   null,
+};
+
+// ── Navegação entre passos ───────────────────────────────────────────────
+function irPara(n) {
+  document.querySelectorAll('.secao').forEach(s => s.classList.remove('ativa'));
+  document.getElementById('passo-' + n).classList.add('ativa');
+  document.querySelectorAll('.step').forEach((s, i) => {
+    s.classList.remove('ativo', 'completo');
+    if (i + 1 === n) s.classList.add('ativo');
+    else if (i + 1 < n) s.classList.add('completo');
+  });
+  estado.passo = n;
+  if (n === 4) iniciarAnalise();
+}
+
+// ── Passo 1: Dissertação ─────────────────────────────────────────────────
+function selecionarDiss(input) {
+  const f = input.files[0];
+  if (!f) return;
+  estado.fileDiss = f;
+  document.getElementById('badge-diss').innerHTML =
+    `<span class="file-badge">📄 ${f.name} <button onclick="removerDiss()">×</button></span>`;
+  document.getElementById('btn-prox-1').disabled = false;
+}
+function removerDiss() {
+  estado.fileDiss = null;
+  document.getElementById('badge-diss').innerHTML = '';
+  document.getElementById('file-diss').value = '';
+  document.getElementById('btn-prox-1').disabled = true;
+}
+
+// ── Passo 2: Referências ─────────────────────────────────────────────────
+function selecionarRefs(input) {
+  const novos = Array.from(input.files);
+  novos.forEach(f => {
+    if (!estado.fileRefs.find(r => r.name === f.name)) estado.fileRefs.push(f);
+  });
+  renderBadgesRef();
+}
+function removerRef(nome) {
+  estado.fileRefs = estado.fileRefs.filter(f => f.name !== nome);
+  renderBadgesRef();
+}
+function renderBadgesRef() {
+  const cont = document.getElementById('badges-ref');
+  cont.innerHTML = estado.fileRefs.map(f =>
+    `<span class="file-badge">📎 ${f.name} <button onclick="removerRef('${f.name.replace(/'/g,"\\'")}')">×</button></span>`
+  ).join('');
+  document.getElementById('btn-prox-2').disabled = estado.fileRefs.length === 0;
+}
+
+// ── Passo 3: Configuração ────────────────────────────────────────────────
+function validarConfig() {
+  const apiKey    = document.getElementById('apikey').value.trim();
+  const semIA     = document.getElementById('toggle-sem-ia').checked;
+  const ok        = semIA || apiKey.startsWith('sk-');
+  document.getElementById('btn-prox-3').disabled = !ok;
+}
+
+// ── Drag & drop ───────────────────────────────────────────────────────────
+document.querySelectorAll('.dropzone').forEach(z => {
+  z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('drag-over'); });
+  z.addEventListener('dragleave',()  => z.classList.remove('drag-over'));
+  z.addEventListener('drop', e => {
+    e.preventDefault(); z.classList.remove('drag-over');
+    const inp = z.querySelector('input[type=file]');
+    const dt  = new DataTransfer();
+    Array.from(e.dataTransfer.files).forEach(f => dt.items.add(f));
+    inp.files = dt.files;
+    inp.dispatchEvent(new Event('change'));
+  });
+});
+
+// ── Passo 4: Análise ─────────────────────────────────────────────────────
+async function iniciarAnalise() {
+  const log = document.getElementById('log-box');
+  const bar = document.getElementById('prog-bar');
+  const lbl = document.getElementById('prog-label');
+  log.innerHTML = '';
+  bar.style.width = '2%';
+  lbl.textContent = 'Enviando arquivos…';
+
+  const form = new FormData();
+  form.append('dissertacao', estado.fileDiss, estado.fileDiss.name);
+  estado.fileRefs.forEach(f => form.append('referencias', f, f.name));
+  form.append('api_key', document.getElementById('apikey').value.trim());
+  form.append('sem_verificacao', document.getElementById('toggle-sem-ia').checked);
+
+  let resp;
+  try {
+    resp = await fetch('/iniciar', { method: 'POST', body: form });
+  } catch (err) {
+    adicionarLog(log, 'Erro ao conectar com o servidor: ' + err, 'erro');
+    return;
+  }
+  if (!resp.ok) {
+    const txt = await resp.text();
+    adicionarLog(log, 'Erro do servidor: ' + txt, 'erro');
+    return;
+  }
+  const { job_id } = await resp.json();
+  estado.jobId = job_id;
+
+  bar.style.width = '5%';
+  lbl.textContent = 'Processando…';
+
+  // SSE stream
+  const sse = new EventSource(`/progresso/${job_id}`);
+  let nEtapas = 0;
+
+  sse.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.tipo === 'etapa') {
+      nEtapas++;
+      const pct = Math.min(90, 5 + nEtapas * 20);
+      bar.style.width = pct + '%';
+      lbl.textContent = msg.msg;
+      adicionarLog(log, msg.msg, 'etapa');
+    } else if (msg.tipo === 'info') {
+      adicionarLog(log, msg.msg, 'info');
+    } else if (msg.tipo === 'concluido') {
+      sse.close();
+      bar.style.width = '100%';
+      lbl.textContent = '✓ Concluído!';
+      adicionarLog(log, '✓ ' + msg.msg, 'ok');
+      document.getElementById('btn-cancelar').style.display = 'inline-flex';
+      setTimeout(() => mostrarRelatorio(msg.resumo, job_id), 800);
+    } else if (msg.tipo === 'erro') {
+      sse.close();
+      bar.style.background = '#dc2626';
+      lbl.textContent = 'Erro durante a análise';
+      adicionarLog(log, '✗ ' + msg.msg, 'erro');
+      if (msg.detalhe) adicionarLog(log, msg.detalhe, 'erro');
+      document.getElementById('btn-cancelar').style.display = 'inline-flex';
+    }
+  };
+  sse.onerror = () => {
+    sse.close();
+    adicionarLog(log, 'Conexão interrompida.', 'warn');
+  };
+}
+
+function adicionarLog(container, texto, tipo) {
+  const classes = { info:'log-info', etapa:'log-etapa', ok:'log-ok', warn:'log-warn', erro:'log-erro' };
+  const line = document.createElement('div');
+  line.className = classes[tipo] || 'log-info';
+  line.textContent = texto;
+  container.appendChild(line);
+  container.scrollTop = container.scrollHeight;
+}
+
+// ── Passo 5: Relatório ───────────────────────────────────────────────────
+function mostrarRelatorio(resumo, jobId) {
+  irPara(5);
+
+  const stats = [
+    { val: resumo.corretas,         label: 'Corretas',        cls: 'stat-correto'   },
+    { val: resumo.incorretas,       label: 'Incorretas',      cls: 'stat-incorreto' },
+    { val: resumo.parciais,         label: 'Parciais',        cls: 'stat-parcial'   },
+    { val: resumo.sem_fonte,        label: 'Sem arquivo',     cls: 'stat-neutro'    },
+    { val: resumo.citadas_sem_ref,  label: 'Sem referência',  cls: 'stat-aviso'     },
+    { val: resumo.refs_sem_citacao, label: 'Ref. sem citação',cls: 'stat-aviso'     },
+  ];
+
+  document.getElementById('stats-grid').innerHTML = stats.map(s =>
+    `<div class="stat-card ${s.cls}">
+       <strong>${s.val}</strong>
+       <span>${s.label}</span>
+     </div>`
+  ).join('');
+
+  document.getElementById('download-row').innerHTML = `
+    <a class="dl-btn dl-html" href="/relatorio/${jobId}/html" download>
+      🌐 Relatório HTML
+    </a>
+    <a class="dl-btn dl-txt" href="/relatorio/${jobId}/txt" download>
+      📄 Relatório TXT
+    </a>
+    <a class="dl-btn dl-json" href="/relatorio/${jobId}/json" download>
+      { } JSON
+    </a>
+  `;
+}
+
+function reiniciar() {
+  if (estado.jobId) fetch('/job/' + estado.jobId, { method: 'DELETE' }).catch(() => {});
+  estado.fileDiss = null;
+  estado.fileRefs = [];
+  estado.jobId    = null;
+  document.getElementById('badge-diss').innerHTML = '';
+  document.getElementById('badges-ref').innerHTML = '';
+  document.getElementById('file-diss').value = '';
+  document.getElementById('file-ref').value  = '';
+  document.getElementById('apikey').value = '';
+  document.getElementById('toggle-sem-ia').checked = false;
+  document.getElementById('btn-prox-1').disabled = true;
+  document.getElementById('btn-prox-2').disabled = true;
+  document.getElementById('btn-prox-3').disabled = true;
+  document.getElementById('prog-bar').style.width = '0%';
+  document.getElementById('prog-bar').style.background = '';
+  document.getElementById('log-box').innerHTML = '';
+  irPara(1);
+}
+</script>
+</body>
+</html>
