@@ -209,7 +209,7 @@ def _rodar_analise(
             log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou estar corrompido.", "warn")
             log(f"   Primeiros 200 chars: {texto_diss[:200]!r}", "warn")
 
-        dados = extractor.extrair(texto_diss, log_fn=lambda m: log(m))
+        dados = extractor.extrair(texto_diss, log_fn=lambda m, t="info": log(m, t))
         citacoes, referencias = extractor.para_objetos(dados)
         log(f"   {len(citacoes)} citações | {len(referencias)} referências identificadas")
 

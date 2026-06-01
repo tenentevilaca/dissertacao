@@ -54,17 +54,17 @@ TEXTO DA DISSERTAÇÃO:
 
 
 def _texto_de_xml(xml_bytes: bytes) -> str:
-    """Extrai todos os textos de um XML do Word."""
+    """Extrai texto de um XML do Word, parágrafo por parágrafo."""
     try:
         root = ET.fromstring(xml_bytes)
-        partes = []
-        for elem in root.iter(f"{{{_NS}}}t"):
-            if elem.text:
-                partes.append(elem.text)
-            # Preserva quebras de parágrafo
-        for elem in root.iter(f"{{{_NS}}}p"):
-            partes.append("\n")
-        return "".join(partes)
+        linhas = []
+        for para in root.iter(f"{{{_NS}}}p"):
+            tokens = []
+            for t in para.iter(f"{{{_NS}}}t"):
+                if t.text:
+                    tokens.append(t.text)
+            linhas.append("".join(tokens))
+        return "\n".join(linhas)
     except Exception:
         return ""
 
@@ -72,7 +72,7 @@ def _texto_de_xml(xml_bytes: bytes) -> str:
 def extrair_texto_docx(caminho: str | Path) -> str:
     """
     Extrai texto completo de um .docx lendo o XML diretamente.
-    Captura: corpo do documento, tabelas, cabeçalhos, rodapés e notas de rodapé.
+    Captura: corpo, tabelas, cabeçalhos, rodapés e notas de rodapé.
     """
     partes: list[str] = []
 
@@ -80,36 +80,35 @@ def extrair_texto_docx(caminho: str | Path) -> str:
         with zipfile.ZipFile(str(caminho), "r") as z:
             nomes = z.namelist()
 
-            # Documento principal
             if "word/document.xml" in nomes:
-                partes.append(_texto_de_xml(z.read("word/document.xml")))
+                corpo = _texto_de_xml(z.read("word/document.xml"))
+                partes.append(corpo)
+            else:
+                partes.append("[AVISO: word/document.xml não encontrado no .docx]")
 
-            # Notas de rodapé
             if "word/footnotes.xml" in nomes:
                 partes.append("\n--- NOTAS DE RODAPÉ ---\n")
                 partes.append(_texto_de_xml(z.read("word/footnotes.xml")))
 
-            # Notas finais
             if "word/endnotes.xml" in nomes:
                 partes.append("\n--- NOTAS FINAIS ---\n")
                 partes.append(_texto_de_xml(z.read("word/endnotes.xml")))
 
-            # Cabeçalhos e rodapés
             for nome in nomes:
                 if nome.startswith("word/header") or nome.startswith("word/footer"):
                     partes.append(_texto_de_xml(z.read(nome)))
 
     except zipfile.BadZipFile:
-        # Tenta python-docx como fallback
         try:
             import docx as docx_lib
             doc = docx_lib.Document(str(caminho))
             partes.append("\n".join(p.text for p in doc.paragraphs))
         except Exception as e:
             partes.append(f"[ERRO AO LER ARQUIVO: {e}]")
+    except Exception as e:
+        partes.append(f"[ERRO AO ABRIR .DOCX: {e}]")
 
     texto = "\n".join(partes)
-    # Remove linhas vazias excessivas
     texto = re.sub(r"\n{3,}", "\n\n", texto)
     return texto.strip()
 
@@ -124,7 +123,7 @@ class AIExtractor:
     def extrair(self, texto: str, log_fn=None) -> dict:
         if not texto.strip():
             if log_fn:
-                log_fn("   ✗ Texto vazio — não foi possível ler o arquivo", "warn")
+                log_fn("   ✗ Texto vazio — não foi possível ler o arquivo")
             return {"citacoes": [], "referencias": []}
 
         if log_fn:
@@ -133,7 +132,7 @@ class AIExtractor:
         try:
             resposta = self.client.messages.create(
                 model=self.model,
-                max_tokens=8192,
+                max_tokens=16000,
                 messages=[{"role": "user", "content": _PROMPT + texto[:_MAX_CHARS]}],
             )
         except Exception as e:
@@ -142,10 +141,13 @@ class AIExtractor:
             raise
 
         raw = resposta.content[0].text.strip()
+        stop_reason = resposta.stop_reason
 
         if log_fn:
-            log_fn(f"   Claude respondeu ({len(raw)} chars)")
-            log_fn(f"   Prévia: {raw[:150].replace(chr(10),' ')}")
+            log_fn(f"   Claude respondeu ({len(raw)} chars, stop={stop_reason})")
+            log_fn(f"   Prévia: {raw[:200].replace(chr(10),' ')}")
+            if stop_reason == "max_tokens":
+                log_fn("   ⚠ Resposta cortada! max_tokens atingido — pode faltar parte do JSON")
 
         # Limpa markdown se presente
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
