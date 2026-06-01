@@ -334,26 +334,72 @@ def extrair_referencias(texto: str, idx_refs: int) -> list[Referencia]:
 # ETAPA 3 — VERIFICAÇÃO SEMÂNTICA COM CLAUDE
 # ═══════════════════════════════════════════════════════════════════════
 
-_PROMPT_VERIF = """Você é um verificador de integridade acadêmica.
+_PROMPT_VERIF = """Você é um verificador de integridade acadêmica especializado em dissertações.
 
-CITAÇÃO encontrada na dissertação:
-"{citacao}"
+TRECHO DA DISSERTAÇÃO que usa a citação {citacao}:
+\"\"\"{contexto}\"\"\"
 
-CONTEXTO na dissertação (trecho ao redor da citação):
-{contexto}
+REFERÊNCIA CITADA: {referencia}
+ARQUIVO FONTE: {arquivo}
 
-TEXTO DA OBRA REFERENCIADA ({arquivo}):
-{fonte}
+TRECHO RELEVANTE DA OBRA CITADA (extraído automaticamente):
+\"\"\"{fonte}\"\"\"
 
-A citação representa fielmente o conteúdo da obra?
+Analise com atenção:
+1. O argumento apresentado na dissertação é coerente com o que a obra realmente afirma?
+2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
+3. A ideia atribuída ao autor realmente consta na obra?
+4. Se há número de página na citação, o conteúdo bate com o trecho encontrado?
 
-Responda SOMENTE com JSON:
-{{"veredicto": "CORRETO" | "INCORRETO" | "PARCIAL" | "SEM_FONTE", "justificativa": "frase curta"}}
+Responda SOMENTE com JSON (sem markdown, sem explicação extra):
+{{"veredicto": "CORRETO" | "INCORRETO" | "PARCIAL" | "SEM_FONTE", "justificativa": "uma frase explicando o veredicto", "trecho_fonte": "trecho exato da obra que confirma ou contradiz (até 200 chars)"}}
 """
+
+_STOPWORDS_PT = {
+    "de", "da", "do", "das", "dos", "e", "a", "o", "as", "os", "um", "uma",
+    "que", "em", "para", "com", "por", "se", "na", "no", "nas", "nos",
+    "ao", "aos", "à", "às", "pelo", "pela", "pelos", "pelas", "como",
+    "mais", "mas", "ou", "sua", "seu", "suas", "seus", "este", "esta",
+    "isso", "esse", "essa", "esses", "essas", "ser", "foi", "são", "está",
+    "não", "também", "quando", "sobre", "entre", "mesmo", "ainda", "pode",
+}
+
+
+def _extrair_trecho_relevante(contexto_cit: str, texto_fonte: str, janela: int = 4000) -> str:
+    """
+    Localiza no texto fonte o trecho mais pertinente para a citação.
+    Usa matching de palavras-chave extraídas do contexto da dissertação.
+    """
+    palavras = re.findall(r'[a-záéíóúâêîôûãõàç]{4,}', contexto_cit.lower())
+    palavras = [p for p in palavras if p not in _STOPWORDS_PT]
+    if not palavras:
+        return texto_fonte[:janela]
+
+    paragrafos = [p.strip() for p in texto_fonte.split('\n') if len(p.strip()) > 40]
+    if not paragrafos:
+        return texto_fonte[:janela]
+
+    def pontuar(para: str) -> int:
+        pl = para.lower()
+        return sum(1 for p in palavras if p in pl)
+
+    scores = sorted(range(len(paragrafos)), key=lambda i: -pontuar(paragrafos[i]))
+    melhor = scores[0]
+    # Inclui parágrafos vizinhos para dar contexto
+    indices = sorted({max(0, melhor - 2), max(0, melhor - 1), melhor,
+                      min(len(paragrafos) - 1, melhor + 1), min(len(paragrafos) - 1, melhor + 2)})
+    trecho = '\n'.join(paragrafos[i] for i in indices)
+    if len(trecho) < janela // 2:
+        # Adiciona mais parágrafos ao redor se o trecho for pequeno
+        extras = [scores[j] for j in range(1, min(4, len(scores)))]
+        for e in sorted(extras):
+            trecho += '\n' + paragrafos[e]
+    return trecho[:janela]
 
 
 def verificar_com_claude(
     citacao: Citacao,
+    referencia: "Referencia",
     arquivo_fonte: str,
     texto_fonte: str,
     api_key: str,
@@ -361,16 +407,18 @@ def verificar_com_claude(
 ) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
+    trecho = _extrair_trecho_relevante(citacao.contexto, texto_fonte)
     prompt = _PROMPT_VERIF.format(
         citacao=citacao.texto,
-        contexto=citacao.contexto[:500],
+        contexto=citacao.contexto[:600],
+        referencia=referencia.texto[:150],
         arquivo=arquivo_fonte,
-        fonte=texto_fonte[:3500],
+        fonte=trecho,
     )
     try:
         resp = client.messages.create(
             model=model,
-            max_tokens=256,
+            max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip()
@@ -378,29 +426,56 @@ def verificar_com_claude(
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            m = re.search(r"\{[^}]+\}", raw)
+            m = re.search(r"\{[^}]+\}", raw, re.DOTALL)
             if m:
                 try:
                     return json.loads(m.group())
                 except Exception:
                     pass
-        return {"veredicto": "ERRO", "justificativa": raw[:200]}
+        return {"veredicto": "ERRO", "justificativa": raw[:300], "trecho_fonte": ""}
     except Exception as e:
-        return {"veredicto": "ERRO", "justificativa": str(e)[:200]}
+        return {"veredicto": "ERRO", "justificativa": str(e)[:200], "trecho_fonte": ""}
 
 
-def _buscar_fonte(sobrenome: str, ano: str, material: dict[str, str]) -> tuple[str, str]:
-    """Tenta encontrar o arquivo de origem para um autor/ano."""
+def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict[str, str]) -> tuple[str, str]:
+    """
+    Tenta encontrar o arquivo de apoio correspondente à referência.
+    Estratégia: nome do arquivo → (sobrenome + ano no texto) → (sobrenome no texto).
+    """
     sob_lower = sobrenome.lower()
-    # 1. Nome do arquivo contém o sobrenome
+    titulo_palavras = [p for p in re.findall(r'[a-záéíóúâêîôûãõàç]{4,}', titulo.lower())
+                       if p not in _STOPWORDS_PT][:5]
+
+    candidatos: list[tuple[int, str, str]] = []  # (score, nome, texto)
+
     for nome, texto in material.items():
-        if sob_lower in nome.lower():
-            return nome, texto
-    # 2. Sobrenome E ano aparecem no texto do arquivo
-    for nome, texto in material.items():
-        if sob_lower in texto.lower() and ano in texto:
-            return nome, texto
-    return "", ""
+        score = 0
+        texto_lower = texto.lower()
+        nome_lower = nome.lower()
+
+        if sob_lower in nome_lower:
+            score += 10
+        if ano in nome:
+            score += 5
+        if sob_lower in texto_lower:
+            score += 3
+        if ano in texto:
+            score += 2
+        # Bônus por palavras do título na primeiras páginas do arquivo
+        cabecalho = texto_lower[:2000]
+        for p in titulo_palavras:
+            if p in cabecalho:
+                score += 1
+
+        if score > 0:
+            candidatos.append((score, nome, texto))
+
+    if not candidatos:
+        return "", ""
+
+    candidatos.sort(key=lambda x: -x[0])
+    _, nome_melhor, texto_melhor = candidatos[0]
+    return nome_melhor, texto_melhor
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -534,26 +609,27 @@ def analisar(
     if api_key.strip() and not sem_verificacao and pareamentos:
         log_fn(f"🤖 ETAPA 4: Verificando {len(pareamentos)} citação(ões) com Claude…", "etapa")
         for i, (cit, ref) in enumerate(pareamentos, 1):
-            arquivo_fonte, texto_fonte = _buscar_fonte(cit.autores[0], cit.ano, material)
+            arquivo_fonte, texto_fonte = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
             log_fn(f"   [{i}/{len(pareamentos)}] {cit.texto[:60]}")
 
             if not texto_fonte:
-                log_fn(f"      → fonte não encontrada para {ref.sobrenome} ({ref.ano})")
+                log_fn(f"      → fonte não encontrada: {ref.sobrenome} ({ref.ano})")
                 verificacoes.append({
                     "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
-                    "contexto": cit.contexto, "referencia": ref.texto[:120],
+                    "contexto": cit.contexto, "referencia": ref.texto[:200],
                     "arquivo_fonte": "", "veredicto": "SEM_FONTE",
                     "justificativa": f"Arquivo para {ref.sobrenome} ({ref.ano}) não encontrado na pasta de referências",
+                    "trecho_fonte": "",
                 })
                 continue
 
-            resultado = verificar_com_claude(cit, arquivo_fonte, texto_fonte, api_key)
+            resultado = verificar_com_claude(cit, ref, arquivo_fonte, texto_fonte, api_key)
             emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠", "SEM_FONTE": "?", "ERRO": "!"}.get(
                 resultado.get("veredicto", ""), "?")
             log_fn(f"      {emoji} {resultado.get('veredicto')} — {resultado.get('justificativa','')[:80]}")
             verificacoes.append({
                 "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
-                "contexto": cit.contexto, "referencia": ref.texto[:120],
+                "contexto": cit.contexto, "referencia": ref.texto[:200],
                 "arquivo_fonte": arquivo_fonte, **resultado,
             })
     elif not api_key.strip() and pareamentos:
@@ -642,26 +718,35 @@ def gerar_relatorio(resultado: dict, rel_dir: Path, diss_path: str) -> None:
             L.append(f"  {r.texto[:100]}")
         L.append("")
 
+    def _bloco_verif(prefixo: str, v: dict) -> list[str]:
+        linhas = [
+            f"  {prefixo} {v['citacao']}",
+            f"    Veredicto  : {v.get('veredicto','')}",
+            f"    Justificativa: {v.get('justificativa','')}",
+        ]
+        if v.get("arquivo_fonte"):
+            linhas.append(f"    Arquivo fonte: {v['arquivo_fonte']}")
+        if v.get("trecho_fonte"):
+            linhas.append(f"    Trecho na obra: \"{v['trecho_fonte'][:200]}\"")
+        if v.get("contexto"):
+            linhas.append(f"    Contexto (dissertação): {v['contexto'][:200]}")
+        linhas.append("")
+        return linhas
+
     if incorretas:
-        L += ["CITAÇÕES COM PROBLEMAS", "-" * 40]
+        L += ["CITAÇÕES COM PROBLEMAS (INCORRETAS)", "-" * 40]
         for v in incorretas:
-            L.append(f"  ✗ {v['citacao']}")
-            L.append(f"    Fonte: {v.get('arquivo_fonte','?')}")
-            L.append(f"    {v.get('justificativa','')}")
-        L.append("")
+            L.extend(_bloco_verif("✗", v))
 
     if parciais:
         L += ["CITAÇÕES PARCIAIS / COM RESSALVAS", "-" * 40]
         for v in parciais:
-            L.append(f"  ⚠ {v['citacao']}")
-            L.append(f"    {v.get('justificativa','')}")
-        L.append("")
+            L.extend(_bloco_verif("⚠", v))
 
     if corretas:
         L += [f"CITAÇÕES CORRETAS ({len(corretas)})", "-" * 40]
         for v in corretas:
-            L.append(f"  ✓ {v['citacao']}")
-        L.append("")
+            L.extend(_bloco_verif("✓", v))
 
     (rel_dir / "relatorio.txt").write_text("\n".join(L), encoding="utf-8")
 
@@ -699,15 +784,29 @@ def gerar_relatorio(resultado: dict, rel_dir: Path, diss_path: str) -> None:
   <div class="card"><span>{len(sem_fonte)}</span><br>Sem fonte</div>
 </div>
 """
+    def _card_verif(v: dict, cls: str) -> str:
+        trecho = v.get("trecho_fonte", "")
+        trecho_html = (f'<blockquote style="margin:.4em 0;font-style:italic;color:#555">'
+                       f'"{esc(trecho)}"</blockquote>') if trecho else ""
+        return (
+            f'<b class="{cls}">{esc(v["citacao"])}</b>'
+            f'<br><small>Fonte: <em>{esc(v.get("arquivo_fonte","?"))}</em></small>'
+            f'<br><small>Ref.: {esc(v.get("referencia","")[:120])}</small>'
+            f'<br>{esc(v.get("justificativa",""))}'
+            f'{trecho_html}'
+            f'<br><small style="color:#888">Contexto na dissertação: {esc(v.get("contexto","")[:200])}</small>'
+        )
+
     html += secao("Citações sem referência na lista", citadas_sem_ref, "#e74c3c",
-                  lambda c: f'<span class="err">{esc(c.texto)}</span> <small>({esc(c.ano)})</small>')
+                  lambda c: f'<b class="err">{esc(c.texto)}</b> <small>({esc(", ".join(c.autores))}, {esc(c.ano)})</small>'
+                            f'<br><small style="color:#888">{esc(c.contexto[:200])}</small>')
     html += secao("Referências sem citação no texto", refs_sem_citacao, "#e67e22",
-                  lambda r: f'<span class="warn">{esc(r.texto[:120])}</span>')
+                  lambda r: f'<span class="warn">{esc(r.texto[:200])}</span>')
     html += secao("Citações INCORRETAS", incorretas, "#c0392b",
-                  lambda v: f'<b>{esc(v["citacao"])}</b><br><small>Fonte: {esc(v.get("arquivo_fonte","?"))}</small><br>{esc(v.get("justificativa",""))}')
+                  lambda v: _card_verif(v, "err"))
     html += secao("Citações PARCIAIS / com ressalvas", parciais, "#d35400",
-                  lambda v: f'<b>{esc(v["citacao"])}</b><br>{esc(v.get("justificativa",""))}')
+                  lambda v: _card_verif(v, "warn"))
     html += secao("Citações CORRETAS", corretas, "#27ae60",
-                  lambda v: f'<span class="ok">{esc(v["citacao"])}</span>')
+                  lambda v: _card_verif(v, "ok"))
     html += "</body></html>"
     (rel_dir / "relatorio.html").write_text(html, encoding="utf-8")
