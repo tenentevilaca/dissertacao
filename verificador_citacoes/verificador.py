@@ -106,7 +106,8 @@ class Citacao:
 @dataclass
 class Referencia:
     texto: str
-    sobrenome: str
+    sobrenome: str          # primeiro autor
+    sobrenomes: list[str]   # TODOS os autores (para cruzamento amplo)
     ano: str
     titulo: str
 
@@ -171,11 +172,46 @@ _RE_ENTRADA_REF = re.compile(
 )
 
 
-def _grupos_citacao(m) -> tuple[list[str], str, Optional[str]]:
-    """Extrai (autores, ano, pagina) de um match de _RE_PAREN ou _RE_NARR.
-    Grupo 1 = bloco de autores, grupo 2 = ano, grupo 3 = página (opcional).
-    """
-    autores = _normalizar_autores(m.group(1))
+# Palavras que NÃO são sobrenomes em citações narrativas
+_NAO_SOBRENOME = {
+    "PARA", "SEGUNDO", "CONFORME", "SOBRE", "COMO", "POR", "COM",
+    "PELO", "PELA", "PELOS", "PELAS", "EM", "DE", "DA", "DO",
+    "APUD", "APUD", "VER", "CF", "VIDE", "ASSIM",
+}
+
+
+def _autores_paren(raw: str) -> list[str]:
+    """Para (AUTOR, ANO): usa o PRIMEIRO token de cada grupo."""
+    raw = re.sub(r",?\s*et\s+al\.?", "", raw, flags=re.IGNORECASE)
+    partes = re.split(r"\s*[;]\s*", raw)
+    result = []
+    for p in partes:
+        tokens = p.strip().split()
+        if tokens:
+            result.append(tokens[0].upper())
+    return result or ["?"]
+
+
+def _autores_narr(raw: str) -> list[str]:
+    """Para AUTOR (ANO): usa o ÚLTIMO token não-preposicional (= sobrenome)."""
+    raw = re.sub(r",?\s*et\s+al\.?", "", raw, flags=re.IGNORECASE)
+    raw = raw.strip().rstrip(".")
+    partes = re.split(r"\s*[;,]\s*", raw)
+    result = []
+    for p in partes:
+        tokens = [t.strip(".,") for t in p.strip().split()
+                  if t.strip(".,").upper() not in _NAO_SOBRENOME]
+        if tokens:
+            result.append(tokens[-1].upper())
+        elif p.strip().split():
+            result.append(p.strip().split()[-1].strip(".,").upper())
+    return result or ["?"]
+
+
+def _grupos_citacao(m, narrativo: bool = False) -> tuple[list[str], str, Optional[str]]:
+    """Extrai (autores, ano, pagina) de um match de _RE_PAREN ou _RE_NARR."""
+    raw = m.group(1) or ""
+    autores = _autores_narr(raw) if narrativo else _autores_paren(raw)
     ano = m.group(2) or "?"
     pag = m.group(3) if m.lastindex and m.lastindex >= 3 else None
     return autores, ano, pag
@@ -202,14 +238,14 @@ def encontrar_citacoes(texto: str) -> tuple[list[Citacao], int]:
         ctx = _contexto(paragrafos[:limite], idx)
 
         for m in _RE_PAREN.finditer(para):
-            autores, ano, pag = _grupos_citacao(m)
+            autores, ano, pag = _grupos_citacao(m, narrativo=False)
             chave = (tuple(autores), ano)
             if chave not in vistos:
                 vistos.add(chave)
                 citacoes.append(Citacao(m.group(0), autores, ano, pag, ctx, idx))
 
         for m in _RE_NARR.finditer(para):
-            autores, ano, pag = _grupos_citacao(m)
+            autores, ano, pag = _grupos_citacao(m, narrativo=True)
             chave = (tuple(autores), ano)
             if chave not in vistos:
                 vistos.add(chave)
@@ -231,18 +267,43 @@ def extrair_referencias(texto: str, idx_refs: int) -> list[Referencia]:
         r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
     )
 
+    # Extrai sobrenomes de todos os autores de uma entrada de referência
+    _RE_AUTORES_REF = re.compile(
+        r"([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\']+),"
+    )
+    # Ano plausível (1900–2030) — evita capturar números de volume/página
+    _RE_ANO_PLAUSIVEL = re.compile(r"\b((?:19|20)\d{2})\b")
+
+    def _sobrenomes_ref(t: str) -> list[str]:
+        """Extrai sobrenomes de todos os autores antes do título."""
+        # Pega todos os tokens SOBRENOME, que aparecem antes do ponto final do último autor
+        # Exemplo: "CEPIK, Marco; BORBA, Pedro. Título..." → ["CEPIK", "BORBA"]
+        resultado = []
+        # Procura até o primeiro ". " ou "." que não seja seguido de letra maiúscula de nome próprio
+        cabecalho = re.split(r"\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]", t)[0]
+        for m in _RE_AUTORES_REF.finditer(cabecalho):
+            sob = m.group(1).upper()
+            if len(sob) > 1:
+                resultado.append(sob)
+        if not resultado:
+            m_sob = re.match(r"^([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-Za-záéíóúâêîôûãõàç\-\']+)", t)
+            if m_sob:
+                resultado = [m_sob.group(1).upper()]
+        return resultado or ["DESCONHECIDO"]
+
     def processar(buf: list[str]) -> Optional[Referencia]:
         t = " ".join(buf).strip()
         if not t:
             return None
-        m = _RE_ENTRADA_REF.match(t)
-        if m:
-            return Referencia(t, m.group(1).upper(), m.group(3), m.group(2)[:80])
-        m_sob = re.match(r"^([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-Za-záéíóúâêîôûãõàç\-\']+)", t)
-        m_ano = re.search(r"\b(\d{4})\b", t)
-        if m_sob and m_ano:
-            return Referencia(t, m_sob.group(1).upper(), m_ano.group(1), t[:80])
-        return None
+        sobrenomes = _sobrenomes_ref(t)
+        sobrenome = sobrenomes[0]
+        # Ano plausível primeiro
+        m_ano = _RE_ANO_PLAUSIVEL.search(t)
+        ano = m_ano.group(1) if m_ano else "s.d."
+        # Título: texto após o bloco de autores
+        m_titulo = re.search(r"\.\s+([A-Z][^\.\n]{5,})", t)
+        titulo = m_titulo.group(1)[:80] if m_titulo else t[:80]
+        return Referencia(t, sobrenome, sobrenomes, ano, titulo)
 
     for linha in paragrafos[idx_refs + 1:]:
         linha = linha.strip()
@@ -433,8 +494,15 @@ def analisar(
     # ──────────────────────────────────────────────────────────────────
     log_fn("🔗 Cruzando citações com referências…", "etapa")
 
-    idx_refs_dict = {f"{r.sobrenome}_{r.ano}": r for r in referencias}
-    chaves_citadas: set[str] = set()
+    # Índice por TODOS os co-autores → mesma referência
+    idx_refs_dict: dict[str, Referencia] = {}
+    for r in referencias:
+        for sob in r.sobrenomes:
+            chave = f"{sob}_{r.ano}"
+            if chave not in idx_refs_dict:  # primeiro autor tem prioridade
+                idx_refs_dict[chave] = r
+
+    chaves_primarias: set[str] = set()   # chave do primeiro autor de cada ref citada
     citadas_sem_ref: list[Citacao] = []
     pareamentos: list[tuple[Citacao, Referencia]] = []
 
@@ -442,15 +510,17 @@ def analisar(
         encontrou = False
         for autor in cit.autores:
             chave = f"{autor}_{cit.ano}"
-            chaves_citadas.add(chave)
             if chave in idx_refs_dict:
-                pareamentos.append((cit, idx_refs_dict[chave]))
+                ref = idx_refs_dict[chave]
+                chave_prim = f"{ref.sobrenome}_{ref.ano}"
+                chaves_primarias.add(chave_prim)
+                pareamentos.append((cit, ref))
                 encontrou = True
                 break
         if not encontrou:
             citadas_sem_ref.append(cit)
 
-    refs_sem_citacao = [r for r in referencias if f"{r.sobrenome}_{r.ano}" not in chaves_citadas]
+    refs_sem_citacao = [r for r in referencias if f"{r.sobrenome}_{r.ano}" not in chaves_primarias]
 
     log_fn(f"   {len(pareamentos)} par(es) | "
            f"{len(citadas_sem_ref)} cit. sem ref | "
@@ -539,7 +609,7 @@ def gerar_relatorio(resultado: dict, rel_dir: Path, diss_path: str) -> None:
             for c in citadas_sem_ref
         ],
         "referenciadas_sem_citacao": [
-            {"referencia": r.texto, "sobrenome": r.sobrenome, "ano": r.ano}
+            {"referencia": r.texto, "sobrenome": r.sobrenome, "sobrenomes": r.sobrenomes, "ano": r.ano}
             for r in refs_sem_citacao
         ],
         "verificacoes": verificacoes,
