@@ -193,7 +193,6 @@ def _rodar_analise(
             log_fn=log,
         )
 
-        # ── Relatório ─────────────────────────────────────────────────────
         log("📊 Gerando relatórios…", "etapa")
         rel_dir = Path(tmpdir) / "relatorio"
         gerar_relatorio(resultado, rel_dir, diss_path)
