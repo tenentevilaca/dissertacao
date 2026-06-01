@@ -180,10 +180,8 @@ def _rodar_analise(
         _enviar(loop, queue, {"tipo": tipo, "msg": msg})
 
     try:
-        if not api_key.strip():
-            raise ValueError("Chave da API Claude não informada. Informe a chave ou ative 'Apenas cruzamento'.")
-
-        os.environ["ANTHROPIC_API_KEY"] = api_key
+        if api_key.strip():
+            os.environ["ANTHROPIC_API_KEY"] = api_key
 
         # ── imports locais para não poluir escopo global ──
         import config as cfg
@@ -196,25 +194,33 @@ def _rodar_analise(
         from modules.citation_verifier import CitationVerifier, Veredicto
         from modules.report_generator import ReportGenerator
 
-        extractor = AIExtractor(api_key=api_key)
+        extractor = AIExtractor(api_key=api_key or "dummy")
 
-        # ── Etapa 1 — Claude lê e entende a dissertação ──────────────────
-        log("📄 Claude lendo e interpretando a dissertação…", "etapa")
-        log("   (isso pode levar 20–40 segundos para dissertações longas)")
+        # ── Etapa 1 — Lê e extrai texto da dissertação ───────────────────
+        log("📄 Lendo a dissertação…", "etapa")
 
+        from modules.ai_extractor import extrair_com_regex
         texto_diss = extractor.ler_docx(diss_path)
-        log(f"   Texto extraído do .docx: {len(texto_diss):,} caracteres")
+        log(f"   Texto extraído: {len(texto_diss):,} caracteres")
 
         if len(texto_diss) < 500:
-            log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou estar corrompido.", "warn")
+            log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou corrompido.", "warn")
             log(f"   Primeiros 200 chars: {texto_diss[:200]!r}", "warn")
 
-        dados = extractor.extrair(texto_diss, log_fn=lambda m, t="info": log(m, t))
-        citacoes, referencias = extractor.para_objetos(dados)
-        log(f"   {len(citacoes)} citações | {len(referencias)} referências identificadas")
+        # Tenta extração via regex ABNT (rápida, gratuita, confiável)
+        log("   Tentando extração por padrões ABNT (regex)…")
+        citacoes, referencias = extrair_com_regex(texto_diss)
+        log(f"   Regex: {len(citacoes)} citações | {len(referencias)} referências")
+
+        # Se regex não encontrou nada, usa Claude como fallback
+        if len(citacoes) == 0 and len(referencias) == 0:
+            log("   Regex não encontrou nada — usando Claude AI como fallback…", "warn")
+            dados = extractor.extrair(texto_diss, log_fn=lambda m, t="info": log(m, t))
+            citacoes, referencias = extractor.para_objetos(dados)
+            log(f"   Claude: {len(citacoes)} citações | {len(referencias)} referências")
 
         if len(citacoes) == 0 and len(referencias) == 0:
-            log("   ⚠ Nenhum conteúdo encontrado — verifique se o arquivo .docx tem texto selecionável (não é imagem escaneada)", "warn")
+            log("   ⚠ Nenhum conteúdo encontrado. Verifique se o .docx tem texto selecionável e se a seção 'REFERÊNCIAS' está presente.", "warn")
 
         # ── Etapa 2 — Cruza citações com referências ─────────────────────
         log("🔗 Cruzando citações com a lista de referências…", "etapa")
@@ -242,7 +248,8 @@ def _rodar_analise(
 
         # ── Etapa 4 — Verificação semântica por IA ───────────────────────
         verificacoes = []
-        if not sem_verificacao and pareamentos:
+        pode_verificar = bool(api_key.strip()) and not sem_verificacao and pareamentos
+        if pode_verificar:
             log(f"🤖 Verificando {len(pareamentos)} citações com IA…", "etapa")
             verifier = CitationVerifier(reader)
             for i, (cit, ref) in enumerate(pareamentos, 1):
@@ -251,6 +258,8 @@ def _rodar_analise(
                 emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠", "SEM_FONTE": "?", "ERRO": "!"}.get(resultado.veredicto.value, "?")
                 log(f"   {emoji} {resultado.veredicto.value} — {resultado.justificativa[:80]}")
                 verificacoes.append(resultado)
+        elif not api_key.strip():
+            log("⏭ Verificação semântica ignorada (sem chave API).", "etapa")
         else:
             log("⏭ Verificação semântica ignorada.", "etapa")
 
