@@ -1,56 +1,117 @@
 """
-Extrai citações e referências usando Claude AI — sem regex, sem regras fixas.
-Claude lê o texto e identifica tudo independente do formato de citação usado.
+Extração de citações e referências usando Claude AI.
+Usa leitura XML direta do .docx (mais robusta que python-docx).
 """
 
 import json
 import re
+import zipfile
 from pathlib import Path
 from typing import Optional
+from xml.etree import ElementTree as ET
 
 import anthropic
-import docx as docx_lib
 
 from modules.dissertation_parser import CitacaoInText, EntradaReferencia
 
+_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_MAX_CHARS = 150_000
 
-_PROMPT = """Você é especialista em análise de textos acadêmicos brasileiros.
+_PROMPT = """Você é um especialista em análise de textos acadêmicos brasileiros.
 
-Analise o texto abaixo de uma dissertação/tese e realize DUAS tarefas:
+Analise o texto abaixo de uma dissertação/tese acadêmica e realize DUAS tarefas:
 
 TAREFA 1 — Citações no corpo do texto
-Identifique TODAS as referências a obras de terceiros no corpo do texto (antes da seção de referências). Inclua qualquer formato encontrado: (AUTOR, ano), Autor (ano), notas numeradas, citações diretas com aspas, etc.
+Identifique TODAS as referências bibliográficas no corpo do texto.
+Inclua qualquer formato: (AUTOR, ano), Autor (ano), notas de rodapé [1], citações entre aspas com fonte, etc.
 
-TAREFA 2 — Lista de referências bibliográficas
-Extraia CADA ENTRADA da seção "REFERÊNCIAS" ou "REFERÊNCIAS BIBLIOGRÁFICAS" que aparecer no final do documento.
+TAREFA 2 — Lista de referências
+Extraia CADA ENTRADA da lista de referências (seção "REFERÊNCIAS", "REFERÊNCIAS BIBLIOGRÁFICAS" ou similar no final).
 
-Retorne SOMENTE um JSON válido, sem nenhum texto antes ou depois:
+Retorne SOMENTE um JSON, sem texto antes ou depois:
 {
   "citacoes": [
     {
-      "texto_original": "texto exato como aparece no documento, ex: (SILVA, 2020, p. 45)",
-      "autores": ["SILVA"],
-      "ano": "2020",
-      "pagina": "45",
-      "contexto": "trecho de ~300 caracteres do texto ao redor da citação"
+      "texto_original": "exatamente como aparece no texto, ex: (CASTELLS, 2001, p. 117)",
+      "autores": ["CASTELLS"],
+      "ano": "2001",
+      "pagina": "117",
+      "contexto": "trecho de 200-300 caracteres ao redor da citação no texto"
     }
   ],
   "referencias": [
     {
-      "texto_completo": "entrada completa da referência como aparece no documento",
-      "autor_sobrenome": "SILVA",
-      "ano": "2020",
-      "titulo": "Título da obra identificado"
+      "texto_completo": "entrada completa como aparece na lista de referências",
+      "autor_sobrenome": "CASTELLS",
+      "ano": "2001",
+      "titulo": "título identificado da obra"
     }
   ]
 }
 
-Se não encontrar citações ou referências, retorne listas vazias — nunca omita as chaves.
-
 TEXTO DA DISSERTAÇÃO:
 """
 
-_MAX_CHARS = 160_000   # margem segura para a janela de 200K tokens do Claude
+
+def _texto_de_xml(xml_bytes: bytes) -> str:
+    """Extrai todos os textos de um XML do Word."""
+    try:
+        root = ET.fromstring(xml_bytes)
+        partes = []
+        for elem in root.iter(f"{{{_NS}}}t"):
+            if elem.text:
+                partes.append(elem.text)
+            # Preserva quebras de parágrafo
+        for elem in root.iter(f"{{{_NS}}}p"):
+            partes.append("\n")
+        return "".join(partes)
+    except Exception:
+        return ""
+
+
+def extrair_texto_docx(caminho: str | Path) -> str:
+    """
+    Extrai texto completo de um .docx lendo o XML diretamente.
+    Captura: corpo do documento, tabelas, cabeçalhos, rodapés e notas de rodapé.
+    """
+    partes: list[str] = []
+
+    try:
+        with zipfile.ZipFile(str(caminho), "r") as z:
+            nomes = z.namelist()
+
+            # Documento principal
+            if "word/document.xml" in nomes:
+                partes.append(_texto_de_xml(z.read("word/document.xml")))
+
+            # Notas de rodapé
+            if "word/footnotes.xml" in nomes:
+                partes.append("\n--- NOTAS DE RODAPÉ ---\n")
+                partes.append(_texto_de_xml(z.read("word/footnotes.xml")))
+
+            # Notas finais
+            if "word/endnotes.xml" in nomes:
+                partes.append("\n--- NOTAS FINAIS ---\n")
+                partes.append(_texto_de_xml(z.read("word/endnotes.xml")))
+
+            # Cabeçalhos e rodapés
+            for nome in nomes:
+                if nome.startswith("word/header") or nome.startswith("word/footer"):
+                    partes.append(_texto_de_xml(z.read(nome)))
+
+    except zipfile.BadZipFile:
+        # Tenta python-docx como fallback
+        try:
+            import docx as docx_lib
+            doc = docx_lib.Document(str(caminho))
+            partes.append("\n".join(p.text for p in doc.paragraphs))
+        except Exception as e:
+            partes.append(f"[ERRO AO LER ARQUIVO: {e}]")
+
+    texto = "\n".join(partes)
+    # Remove linhas vazias excessivas
+    texto = re.sub(r"\n{3,}", "\n\n", texto)
+    return texto.strip()
 
 
 class AIExtractor:
@@ -60,122 +121,63 @@ class AIExtractor:
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
 
-    # ── Leitura ──────────────────────────────────────────────────────────
-
-    def ler_docx(self, caminho: str | Path) -> str:
-        """
-        Extrai texto completo de um .docx incluindo:
-        parágrafos, tabelas, cabeçalhos, rodapés e notas de rodapé.
-        """
-        doc = docx_lib.Document(str(caminho))
-        partes: list[str] = []
-
-        # Parágrafos normais
-        for p in doc.paragraphs:
-            if p.text.strip():
-                partes.append(p.text)
-
-        # Tabelas (células)
-        for tabela in doc.tables:
-            for linha in tabela.rows:
-                for celula in linha.cells:
-                    for p in celula.paragraphs:
-                        if p.text.strip():
-                            partes.append(p.text)
-
-        # Cabeçalhos e rodapés de cada seção
-        for secao in doc.sections:
-            for p in secao.header.paragraphs:
-                if p.text.strip():
-                    partes.append(p.text)
-            for p in secao.footer.paragraphs:
-                if p.text.strip():
-                    partes.append(p.text)
-
-        # Notas de rodapé (via XML direto)
-        try:
-            from docx.oxml.ns import qn
-            for fn in doc.element.findall(
-                f'.//{qn("w:footnote")}', doc.element.nsmap
-            ):
-                texto_fn = "".join(t.text or "" for t in fn.iter(qn("w:t")))
-                if texto_fn.strip():
-                    partes.append(texto_fn)
-        except Exception:
-            pass
-
-        return "\n".join(partes)
-
-    # ── Extração via Claude ───────────────────────────────────────────────
-
     def extrair(self, texto: str, log_fn=None) -> dict:
-        """
-        Envia o texto ao Claude e obtém citações + referências como JSON.
-        log_fn: função opcional para registrar progresso (str → None).
-        """
-        if log_fn:
-            chars = len(texto)
-            log_fn(f"   Texto da dissertação: {chars:,} caracteres")
-            if chars > _MAX_CHARS:
-                log_fn(f"   Texto muito longo — enviando os primeiros {_MAX_CHARS:,} caracteres")
+        if not texto.strip():
+            if log_fn:
+                log_fn("   ✗ Texto vazio — não foi possível ler o arquivo", "warn")
+            return {"citacoes": [], "referencias": []}
 
         if log_fn:
-            log_fn("   Enviando texto ao Claude para análise inteligente…")
+            log_fn(f"   Enviando {len(texto):,} caracteres ao Claude…")
 
         try:
             resposta = self.client.messages.create(
                 model=self.model,
                 max_tokens=8192,
-                messages=[{
-                    "role": "user",
-                    "content": _PROMPT + texto[:_MAX_CHARS]
-                }]
+                messages=[{"role": "user", "content": _PROMPT + texto[:_MAX_CHARS]}],
             )
         except Exception as e:
             if log_fn:
-                log_fn(f"   ✗ Erro na chamada à API Claude: {e}")
+                log_fn(f"   ✗ Erro na API Claude: {e}")
             raise
 
         raw = resposta.content[0].text.strip()
 
         if log_fn:
-            log_fn(f"   Claude respondeu ({len(raw)} chars). Processando JSON…")
-            # Mostra prévia da resposta para diagnóstico
-            log_fn(f"   Prévia: {raw[:200].replace(chr(10), ' ')}")
+            log_fn(f"   Claude respondeu ({len(raw)} chars)")
+            log_fn(f"   Prévia: {raw[:150].replace(chr(10),' ')}")
 
-        # Remove blocos markdown se o modelo os adicionar
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
+        # Limpa markdown se presente
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
+        raw = re.sub(r"\s*```\s*$", "", raw, flags=re.MULTILINE)
 
+        # Tenta parsear JSON
         try:
-            dados = json.loads(raw)
+            return json.loads(raw)
         except json.JSONDecodeError:
-            # Tenta extrair JSON embutido no texto
-            m = re.search(r'\{[\s\S]*\}', raw)
+            m = re.search(r"\{[\s\S]*\}", raw)
             if m:
                 try:
-                    dados = json.loads(m.group())
+                    return json.loads(m.group())
                 except json.JSONDecodeError:
-                    if log_fn:
-                        log_fn(f"   ✗ Falha ao interpretar resposta do Claude. Resposta raw: {raw[:300]}")
-                    dados = {"citacoes": [], "referencias": []}
-            else:
-                if log_fn:
-                    log_fn(f"   ✗ Claude não retornou JSON válido. Resposta: {raw[:300]}")
-                dados = {"citacoes": [], "referencias": []}
+                    pass
+            if log_fn:
+                log_fn(f"   ✗ JSON inválido. Resposta bruta: {raw[:400]}")
+            return {"citacoes": [], "referencias": []}
 
-        return dados
+    def ler_docx(self, caminho: str | Path) -> str:
+        """Retorna o texto extraído do .docx (para uso externo antes de extrair)."""
+        return extrair_texto_docx(caminho)
 
     def extrair_de_docx(self, caminho: str | Path, log_fn=None) -> dict:
-        texto = self.ler_docx(caminho)
+        texto = extrair_texto_docx(caminho)
+        if log_fn:
+            log_fn(f"   Texto extraído do .docx: {len(texto):,} caracteres")
+            if len(texto) < 200:
+                log_fn(f"   ⚠ Texto muito curto: {repr(texto[:200])}")
         return self.extrair(texto, log_fn=log_fn)
 
-    # ── Conversão para objetos ────────────────────────────────────────────
-
-    def para_objetos(
-        self, dados: dict
-    ) -> tuple[list[CitacaoInText], list[EntradaReferencia]]:
-        """Converte o JSON do Claude nos objetos usados pelo resto do sistema."""
+    def para_objetos(self, dados: dict) -> tuple[list[CitacaoInText], list[EntradaReferencia]]:
         citacoes: list[CitacaoInText] = []
         for i, c in enumerate(dados.get("citacoes", [])):
             try:
@@ -207,14 +209,7 @@ class AIExtractor:
 
         return citacoes, referencias
 
-    # ── Cruzamento citações × referências ────────────────────────────────
-
-    def cruzar(
-        self,
-        citacoes: list[CitacaoInText],
-        referencias: list[EntradaReferencia],
-    ) -> dict:
-        """Cruza citações com referências por autor + ano."""
+    def cruzar(self, citacoes: list[CitacaoInText], referencias: list[EntradaReferencia]) -> dict:
         idx_refs: dict[str, EntradaReferencia] = {}
         for ref in referencias:
             chave = f"{ref.autor_sobrenome.upper()}_{ref.ano}"
@@ -222,7 +217,7 @@ class AIExtractor:
 
         chaves_citadas: set[str] = set()
         citadas_sem_ref: list[CitacaoInText] = []
-        pareamentos: list[tuple[CitacaoInText, EntradaReferencia]] = []
+        pareamentos: list[tuple] = []
 
         for cit in citacoes:
             encontrou = False
@@ -236,10 +231,7 @@ class AIExtractor:
             if not encontrou:
                 citadas_sem_ref.append(cit)
 
-        refs_sem_citacao = [
-            ref for chave, ref in idx_refs.items()
-            if chave not in chaves_citadas
-        ]
+        refs_sem_citacao = [r for k, r in idx_refs.items() if k not in chaves_citadas]
 
         return {
             "citadas_sem_referencia": citadas_sem_ref,
