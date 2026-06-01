@@ -43,12 +43,27 @@ async def index():
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/ping")
+async def ping():
+    return {"ok": True}
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(_BASE / "static" / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/icon-{size}.png")
+async def icon(size: str):
+    return FileResponse(_BASE / "static" / f"icon-{size}.png", media_type="image/png")
+
+
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
     referencias: list[UploadFile] = File(...),
-    api_key: str = Form(...),
-    sem_verificacao: bool = Form(False),
+    api_key: str = Form(""),
+    sem_verificacao: str = Form("false"),
 ):
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
@@ -71,11 +86,14 @@ async def iniciar_analise(
         dest = refs_dir / arq.filename
         dest.write_bytes(await arq.read())
 
+    # Converte sem_verificacao (vem como string do FormData JS)
+    sem_verif_bool = str(sem_verificacao).lower() in ("true", "1", "yes")
+
     # Dispara análise em thread separada (código síncrono)
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise,
-        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verificacao, loop),
+        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verif_bool, loop),
         daemon=True,
     ).start()
 
@@ -162,6 +180,9 @@ def _rodar_analise(
         _enviar(loop, queue, {"tipo": tipo, "msg": msg})
 
     try:
+        if not api_key.strip():
+            raise ValueError("Chave da API Claude não informada. Informe a chave ou ative 'Apenas cruzamento'.")
+
         os.environ["ANTHROPIC_API_KEY"] = api_key
 
         # ── imports locais para não poluir escopo global ──
@@ -170,32 +191,42 @@ def _rodar_analise(
         cfg.REFERENCIAS_FOLDER  = refs_dir
         cfg.ANTHROPIC_API_KEY   = api_key
 
-        from modules.dissertation_parser import DissertationParser
+        from modules.ai_extractor import AIExtractor
         from modules.reference_reader import ReferenceReader
         from modules.citation_verifier import CitationVerifier, Veredicto
         from modules.report_generator import ReportGenerator
 
-        # ── Etapa 1 ──────────────────────────────────────────────────────
-        log("📄 Lendo a dissertação…", "etapa")
-        parser = DissertationParser(diss_path)
-        parser.carregar()
-        citacoes    = parser.extrair_citacoes()
-        referencias = parser.extrair_referencias()
-        log(f"   {len(citacoes)} citações | {len(referencias)} referências encontradas")
+        extractor = AIExtractor(api_key=api_key)
 
-        # ── Etapa 2 ──────────────────────────────────────────────────────
+        # ── Etapa 1 — Claude lê e entende a dissertação ──────────────────
+        log("📄 Claude lendo e interpretando a dissertação…", "etapa")
+        log("   (isso pode levar 20–40 segundos para dissertações longas)")
+
+        texto_diss = extractor.ler_docx(diss_path)
+        log(f"   Texto extraído do .docx: {len(texto_diss):,} caracteres")
+
+        if len(texto_diss) < 500:
+            log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou estar corrompido.", "warn")
+            log(f"   Primeiros 200 chars: {texto_diss[:200]!r}", "warn")
+
+        dados = extractor.extrair(texto_diss, log_fn=lambda m: log(m))
+        citacoes, referencias = extractor.para_objetos(dados)
+        log(f"   {len(citacoes)} citações | {len(referencias)} referências identificadas")
+
+        if len(citacoes) == 0 and len(referencias) == 0:
+            log("   ⚠ Nenhum conteúdo encontrado — verifique se o arquivo .docx tem texto selecionável (não é imagem escaneada)", "warn")
+
+        # ── Etapa 2 — Cruza citações com referências ─────────────────────
         log("🔗 Cruzando citações com a lista de referências…", "etapa")
-        cruzamento       = parser.cruzar_citacoes_referencias()
+        cruzamento       = extractor.cruzar(citacoes, referencias)
         citadas_sem_ref  = cruzamento["citadas_sem_referencia"]
         refs_sem_citacao = cruzamento["referenciadas_sem_citacao"]
         pareamentos      = cruzamento["pareamentos"]
         log(f"   {len(pareamentos)} pares | {len(citadas_sem_ref)} sem referência | {len(refs_sem_citacao)} ref. sem citação")
 
-        # ── Etapa 3 ──────────────────────────────────────────────────────
+        # ── Etapa 3 — Lê os documentos-fonte ────────────────────────────
         log("📂 Lendo os documentos da pasta de referências…", "etapa")
         reader = ReferenceReader(refs_dir)
-
-        # Versão com callback de progresso
         from config import EXTENSOES_SUPORTADAS
         arquivos = [
             f for f in Path(refs_dir).rglob("*")
@@ -203,13 +234,13 @@ def _rodar_analise(
         ]
         log(f"   {len(arquivos)} arquivo(s) encontrado(s)")
         for arq in arquivos:
-            doc = reader._ler_arquivo(arq)
-            if doc:
-                reader.documentos.append(doc)
+            doc_ref = reader._ler_arquivo(arq)
+            if doc_ref:
+                reader.documentos.append(doc_ref)
                 log(f"   ✓ {arq.name}")
         reader._construir_indice()
 
-        # ── Etapa 4 ──────────────────────────────────────────────────────
+        # ── Etapa 4 — Verificação semântica por IA ───────────────────────
         verificacoes = []
         if not sem_verificacao and pareamentos:
             log(f"🤖 Verificando {len(pareamentos)} citações com IA…", "etapa")

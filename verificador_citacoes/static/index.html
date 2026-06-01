@@ -2,7 +2,12 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a3a5c">
+<link rel="manifest" href="/manifest.json">
 <title>Verificador de Citações Acadêmicas</title>
 <style>
 /* ── Reset & Base ─────────────────────────────────────────── */
@@ -528,6 +533,9 @@ document.querySelectorAll('.dropzone').forEach(z => {
   });
 });
 
+// ── Utilitário: espera ms milissegundos ───────────────────────────────────
+const _esperar = ms => new Promise(r => setTimeout(r, ms));
+
 // ── Passo 4: Análise ─────────────────────────────────────────────────────
 async function iniciarAnalise() {
   const log = document.getElementById('log-box');
@@ -535,6 +543,28 @@ async function iniciarAnalise() {
   const lbl = document.getElementById('prog-label');
   log.innerHTML = '';
   bar.style.width = '2%';
+  lbl.textContent = 'Conectando ao servidor…';
+
+  // Acorda o servidor (Render plano free dorme após 15 min sem uso)
+  adicionarLog(log, '⏳ Verificando conexão com o servidor…', 'info');
+  let servidorOk = false;
+  for (let t = 1; t <= 8; t++) {
+    try {
+      const pong = await fetch('/ping', { signal: AbortSignal.timeout(8000) });
+      if (pong.ok) { servidorOk = true; break; }
+    } catch (_) {}
+    adicionarLog(log, `   Servidor acordando, aguarde… (${t * 8}s)`, 'warn');
+    lbl.textContent = `Servidor acordando… ${t * 8}s`;
+    bar.style.width = (t * 5) + '%';
+    await _esperar(8000);
+  }
+  if (!servidorOk) {
+    adicionarLog(log, '✗ Servidor não respondeu após 60 s. Recarregue e tente novamente.', 'erro');
+    document.getElementById('btn-cancelar').style.display = 'inline-flex';
+    return;
+  }
+  adicionarLog(log, '✓ Servidor pronto. Enviando arquivos…', 'ok');
+  bar.style.width = '8%';
   lbl.textContent = 'Enviando arquivos…';
 
   const form = new FormData();
@@ -547,12 +577,15 @@ async function iniciarAnalise() {
   try {
     resp = await fetch('/iniciar', { method: 'POST', body: form });
   } catch (err) {
-    adicionarLog(log, 'Erro ao conectar com o servidor: ' + err, 'erro');
+    adicionarLog(log, '✗ Erro ao enviar arquivos: ' + err, 'erro');
+    adicionarLog(log, '  Verifique sua conexão e tente novamente.', 'warn');
+    document.getElementById('btn-cancelar').style.display = 'inline-flex';
     return;
   }
   if (!resp.ok) {
     const txt = await resp.text();
-    adicionarLog(log, 'Erro do servidor: ' + txt, 'erro');
+    adicionarLog(log, '✗ Erro do servidor: ' + txt, 'erro');
+    document.getElementById('btn-cancelar').style.display = 'inline-flex';
     return;
   }
   const { job_id } = await resp.json();
