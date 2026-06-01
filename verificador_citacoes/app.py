@@ -183,107 +183,34 @@ def _rodar_analise(
         if api_key.strip():
             os.environ["ANTHROPIC_API_KEY"] = api_key
 
-        # ── imports locais para não poluir escopo global ──
-        import config as cfg
-        cfg.DISSERTACAO_PATH    = diss_path
-        cfg.REFERENCIAS_FOLDER  = refs_dir
-        cfg.ANTHROPIC_API_KEY   = api_key
+        from verificador import analisar, gerar_relatorio
 
-        from modules.ai_extractor import AIExtractor
-        from modules.reference_reader import ReferenceReader
-        from modules.citation_verifier import CitationVerifier, Veredicto
-        from modules.report_generator import ReportGenerator
-
-        extractor = AIExtractor(api_key=api_key or "dummy")
-
-        # ── Etapa 1 — Lê e extrai texto da dissertação ───────────────────
-        log("📄 Lendo a dissertação…", "etapa")
-
-        from modules.ai_extractor import extrair_com_regex
-        texto_diss = extractor.ler_docx(diss_path)
-        log(f"   Texto extraído: {len(texto_diss):,} caracteres")
-
-        if len(texto_diss) < 500:
-            log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou corrompido.", "warn")
-            log(f"   Primeiros 200 chars: {texto_diss[:200]!r}", "warn")
-
-        # Tenta extração via regex ABNT (rápida, gratuita, confiável)
-        log("   Tentando extração por padrões ABNT (regex)…")
-        citacoes, referencias = extrair_com_regex(texto_diss)
-        log(f"   Regex: {len(citacoes)} citações | {len(referencias)} referências")
-
-        # Se regex não encontrou nada, usa Claude como fallback
-        if len(citacoes) == 0 and len(referencias) == 0:
-            log("   Regex não encontrou nada — usando Claude AI como fallback…", "warn")
-            dados = extractor.extrair(texto_diss, log_fn=lambda m, t="info": log(m, t))
-            citacoes, referencias = extractor.para_objetos(dados)
-            log(f"   Claude: {len(citacoes)} citações | {len(referencias)} referências")
-
-        if len(citacoes) == 0 and len(referencias) == 0:
-            log("   ⚠ Nenhum conteúdo encontrado. Verifique se o .docx tem texto selecionável e se a seção 'REFERÊNCIAS' está presente.", "warn")
-
-        # ── Etapa 2 — Cruza citações com referências ─────────────────────
-        log("🔗 Cruzando citações com a lista de referências…", "etapa")
-        cruzamento       = extractor.cruzar(citacoes, referencias)
-        citadas_sem_ref  = cruzamento["citadas_sem_referencia"]
-        refs_sem_citacao = cruzamento["referenciadas_sem_citacao"]
-        pareamentos      = cruzamento["pareamentos"]
-        log(f"   {len(pareamentos)} pares | {len(citadas_sem_ref)} sem referência | {len(refs_sem_citacao)} ref. sem citação")
-
-        # ── Etapa 3 — Lê os documentos-fonte ────────────────────────────
-        log("📂 Lendo os documentos da pasta de referências…", "etapa")
-        reader = ReferenceReader(refs_dir)
-        from config import EXTENSOES_SUPORTADAS
-        arquivos = [
-            f for f in Path(refs_dir).rglob("*")
-            if f.is_file() and f.suffix.lower() in EXTENSOES_SUPORTADAS
-        ]
-        log(f"   {len(arquivos)} arquivo(s) encontrado(s)")
-        for arq in arquivos:
-            doc_ref = reader._ler_arquivo(arq)
-            if doc_ref:
-                reader.documentos.append(doc_ref)
-                log(f"   ✓ {arq.name}")
-        reader._construir_indice()
-
-        # ── Etapa 4 — Verificação semântica por IA ───────────────────────
-        verificacoes = []
-        pode_verificar = bool(api_key.strip()) and not sem_verificacao and pareamentos
-        if pode_verificar:
-            log(f"🤖 Verificando {len(pareamentos)} citações com IA…", "etapa")
-            verifier = CitationVerifier(reader)
-            for i, (cit, ref) in enumerate(pareamentos, 1):
-                log(f"   [{i}/{len(pareamentos)}] {cit.texto_original[:70]}…")
-                resultado = verifier.verificar(cit, ref)
-                emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠", "SEM_FONTE": "?", "ERRO": "!"}.get(resultado.veredicto.value, "?")
-                log(f"   {emoji} {resultado.veredicto.value} — {resultado.justificativa[:80]}")
-                verificacoes.append(resultado)
-        elif not api_key.strip():
-            log("⏭ Verificação semântica ignorada (sem chave API).", "etapa")
-        else:
-            log("⏭ Verificação semântica ignorada.", "etapa")
+        resultado = analisar(
+            diss_path=diss_path,
+            refs_dir=refs_dir,
+            api_key=api_key,
+            sem_verificacao=sem_verificacao,
+            log_fn=log,
+        )
 
         # ── Relatório ─────────────────────────────────────────────────────
         log("📊 Gerando relatórios…", "etapa")
         rel_dir = Path(tmpdir) / "relatorio"
-        gen = ReportGenerator(
-            citadas_sem_ref=citadas_sem_ref,
-            refs_sem_citacao=refs_sem_citacao,
-            verificacoes=verificacoes,
-            caminho_dissertacao=str(diss_path),
-        )
-        gen.gerar_txt(rel_dir / "relatorio.txt")
-        gen.gerar_html(rel_dir / "relatorio.html")
-        gen.gerar_json(rel_dir / "relatorio.json")
+        gerar_relatorio(resultado, rel_dir, diss_path)
 
         _jobs[job_id]["relatorio_dir"] = str(rel_dir)
         _jobs[job_id]["status"] = "concluido"
 
-        # Resumo final
-        corretas   = sum(1 for v in verificacoes if v.veredicto.value == "CORRETO")
-        incorretas = sum(1 for v in verificacoes if v.veredicto.value == "INCORRETO")
-        parciais   = sum(1 for v in verificacoes if v.veredicto.value == "PARCIAL")
-        sem_fonte  = sum(1 for v in verificacoes if v.veredicto.value == "SEM_FONTE")
+        verificacoes     = resultado["verificacoes"]
+        citadas_sem_ref  = resultado["citadas_sem_ref"]
+        refs_sem_citacao = resultado["refs_sem_citacao"]
+        citacoes         = resultado["citacoes"]
+        referencias      = resultado["referencias"]
+
+        corretas   = sum(1 for v in verificacoes if v.get("veredicto") == "CORRETO")
+        incorretas = sum(1 for v in verificacoes if v.get("veredicto") == "INCORRETO")
+        parciais   = sum(1 for v in verificacoes if v.get("veredicto") == "PARCIAL")
+        sem_fonte  = sum(1 for v in verificacoes if v.get("veredicto") == "SEM_FONTE")
 
         _enviar(loop, queue, {
             "tipo": "concluido",
