@@ -63,9 +63,48 @@ class AIExtractor:
     # ── Leitura ──────────────────────────────────────────────────────────
 
     def ler_docx(self, caminho: str | Path) -> str:
-        """Extrai texto completo de um .docx preservando parágrafos."""
+        """
+        Extrai texto completo de um .docx incluindo:
+        parágrafos, tabelas, cabeçalhos, rodapés e notas de rodapé.
+        """
         doc = docx_lib.Document(str(caminho))
-        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        partes: list[str] = []
+
+        # Parágrafos normais
+        for p in doc.paragraphs:
+            if p.text.strip():
+                partes.append(p.text)
+
+        # Tabelas (células)
+        for tabela in doc.tables:
+            for linha in tabela.rows:
+                for celula in linha.cells:
+                    for p in celula.paragraphs:
+                        if p.text.strip():
+                            partes.append(p.text)
+
+        # Cabeçalhos e rodapés de cada seção
+        for secao in doc.sections:
+            for p in secao.header.paragraphs:
+                if p.text.strip():
+                    partes.append(p.text)
+            for p in secao.footer.paragraphs:
+                if p.text.strip():
+                    partes.append(p.text)
+
+        # Notas de rodapé (via XML direto)
+        try:
+            from docx.oxml.ns import qn
+            for fn in doc.element.findall(
+                f'.//{qn("w:footnote")}', doc.element.nsmap
+            ):
+                texto_fn = "".join(t.text or "" for t in fn.iter(qn("w:t")))
+                if texto_fn.strip():
+                    partes.append(texto_fn)
+        except Exception:
+            pass
+
+        return "\n".join(partes)
 
     # ── Extração via Claude ───────────────────────────────────────────────
 
@@ -80,16 +119,29 @@ class AIExtractor:
             if chars > _MAX_CHARS:
                 log_fn(f"   Texto muito longo — enviando os primeiros {_MAX_CHARS:,} caracteres")
 
-        resposta = self.client.messages.create(
-            model=self.model,
-            max_tokens=8192,
-            messages=[{
-                "role": "user",
-                "content": _PROMPT + texto[:_MAX_CHARS]
-            }]
-        )
+        if log_fn:
+            log_fn("   Enviando texto ao Claude para análise inteligente…")
+
+        try:
+            resposta = self.client.messages.create(
+                model=self.model,
+                max_tokens=8192,
+                messages=[{
+                    "role": "user",
+                    "content": _PROMPT + texto[:_MAX_CHARS]
+                }]
+            )
+        except Exception as e:
+            if log_fn:
+                log_fn(f"   ✗ Erro na chamada à API Claude: {e}")
+            raise
 
         raw = resposta.content[0].text.strip()
+
+        if log_fn:
+            log_fn(f"   Claude respondeu ({len(raw)} chars). Processando JSON…")
+            # Mostra prévia da resposta para diagnóstico
+            log_fn(f"   Prévia: {raw[:200].replace(chr(10), ' ')}")
 
         # Remove blocos markdown se o modelo os adicionar
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -104,8 +156,12 @@ class AIExtractor:
                 try:
                     dados = json.loads(m.group())
                 except json.JSONDecodeError:
+                    if log_fn:
+                        log_fn(f"   ✗ Falha ao interpretar resposta do Claude. Resposta raw: {raw[:300]}")
                     dados = {"citacoes": [], "referencias": []}
             else:
+                if log_fn:
+                    log_fn(f"   ✗ Claude não retornou JSON válido. Resposta: {raw[:300]}")
                 dados = {"citacoes": [], "referencias": []}
 
         return dados

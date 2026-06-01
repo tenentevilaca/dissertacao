@@ -201,7 +201,15 @@ def _rodar_analise(
         # ── Etapa 1 — Claude lê e entende a dissertação ──────────────────
         log("📄 Claude lendo e interpretando a dissertação…", "etapa")
         log("   (isso pode levar 20–40 segundos para dissertações longas)")
-        dados = extractor.extrair_de_docx(diss_path, log_fn=lambda m: log(m))
+
+        texto_diss = extractor.ler_docx(diss_path)
+        log(f"   Texto extraído do .docx: {len(texto_diss):,} caracteres")
+
+        if len(texto_diss) < 500:
+            log("   ⚠ Texto muito curto! O arquivo pode ser uma imagem escaneada ou estar corrompido.", "warn")
+            log(f"   Primeiros 200 chars: {texto_diss[:200]!r}", "warn")
+
+        dados = extractor.extrair(texto_diss, log_fn=lambda m: log(m))
         citacoes, referencias = extractor.para_objetos(dados)
         log(f"   {len(citacoes)} citações | {len(referencias)} referências identificadas")
 
