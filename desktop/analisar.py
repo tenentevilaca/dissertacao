@@ -420,7 +420,7 @@ TRECHO DA DISSERTAÇÃO com a citação {citacao}:
 REFERÊNCIA BIBLIOGRÁFICA: {referencia}
 ARQUIVO FONTE: {arquivo}
 
-TRECHO RELEVANTE DA OBRA CITADA:
+{cabecalho_fonte}
 \"\"\"{fonte}\"\"\"
 
 Analise:
@@ -432,19 +432,36 @@ Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "frase curta", "trecho_fonte": "trecho real da obra até 150 chars"}}
 """
 
+# Limite prático: abaixo deste valor envia o arquivo INTEIRO ao Claude.
+# Acima disso (livros muito longos) seleciona as seções mais relevantes.
+# 150 000 chars ≈ 37 500 tokens — bem abaixo do limite de 200K do claude-sonnet-4-6.
+_LIMITE_FONTE_COMPLETA = 150_000
+
 
 def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                      texto_fonte: str, api_key: str) -> dict:
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        trecho = _trecho_relevante(cit.contexto, texto_fonte)
+
+        if len(texto_fonte) <= _LIMITE_FONTE_COMPLETA:
+            # Arquivo cabe inteiro — envia tudo, sem cortes
+            fonte_final = texto_fonte
+            cabecalho = "CONTEÚDO COMPLETO DA OBRA CITADA:"
+        else:
+            # Arquivo muito grande (livro completo) — seleciona trechos relevantes
+            fonte_final = _trecho_relevante(cit.contexto, texto_fonte, janela=_LIMITE_FONTE_COMPLETA)
+            tamanho_kb = len(texto_fonte) // 1024
+            cabecalho = (f"TRECHOS RELEVANTES DA OBRA CITADA "
+                         f"(arquivo {tamanho_kb} KB — seleção dos trechos mais pertinentes):")
+
         prompt = _PROMPT_CLAUDE.format(
             citacao=cit.texto,
-            contexto=cit.contexto[:1200],   # contexto maior da dissertação
+            contexto=cit.contexto[:1200],
             referencia=ref.texto[:300],
             arquivo=arquivo,
-            fonte=trecho,
+            cabecalho_fonte=cabecalho,
+            fonte=fonte_final,
         )
         resp = client.messages.create(
             model="claude-sonnet-4-6",
@@ -662,7 +679,12 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                 L("\n[INTERROMPIDO]")
                 break
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
+            modo = ("completo" if txt and len(txt) <= _LIMITE_FONTE_COMPLETA
+                    else "seleção") if txt else "—"
+            tam = f"{len(txt)//1024} KB" if txt else "—"
             L(f"  [{i:>3}/{len(pareamentos)}] {cit.texto[:70]}")
+            if txt:
+                L(f"         → fonte: {arq}  ({tam}, leitura {modo})")
             if not txt:
                 L(f"         → arquivo não encontrado para {ref.sobrenome} ({ref.ano})")
                 verificacoes.append({
