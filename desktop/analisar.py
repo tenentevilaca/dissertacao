@@ -351,7 +351,11 @@ _STOPWORDS = {
 }
 
 
-def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 4000) -> str:
+def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 20000) -> str:
+    """Seleciona os trechos mais relevantes do texto fonte para enviar à IA.
+    Envia até `janela` caracteres (~10 páginas) distribuídos pelos parágrafos
+    com maior sobreposição de palavras-chave com o contexto da citação.
+    """
     palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", contexto.lower())
                 if p not in _STOPWORDS]
     if not palavras:
@@ -359,29 +363,46 @@ def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 4000) -> st
     paras = [p.strip() for p in texto_fonte.split("\n") if len(p.strip()) > 40]
     if not paras:
         return texto_fonte[:janela]
-    scores = sorted(range(len(paras)),
-                    key=lambda i: -sum(1 for w in palavras if w in paras[i].lower()))
-    melhor = scores[0]
-    indices = sorted({max(0, melhor - 2), max(0, melhor - 1), melhor,
-                      min(len(paras) - 1, melhor + 1), min(len(paras) - 1, melhor + 2)})
-    trecho = "\n".join(paras[i] for i in indices)
+
+    # Pontua cada parágrafo pela quantidade de palavras-chave presentes
+    scored = sorted(
+        range(len(paras)),
+        key=lambda i: -sum(1 for w in palavras if w in paras[i].lower())
+    )
+
+    # Inclui os 3 melhores parágrafo com ±3 vizinhos cada para dar contexto
+    indices = set()
+    for rank in scored[:3]:
+        for delta in range(-3, 4):
+            idx = rank + delta
+            if 0 <= idx < len(paras):
+                indices.add(idx)
+
+    trecho = "\n".join(paras[i] for i in sorted(indices))
+
+    # Se ainda tiver espaço na janela, acrescenta o início da obra (capa/intro)
+    if len(trecho) < janela // 2:
+        inicio = "\n".join(paras[:10])
+        trecho = inicio + "\n\n[...]\n\n" + trecho
+
     return trecho[:janela]
 
 
 def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict) -> tuple:
     sob_l = sobrenome.lower()
+    # Usa até 10 palavras do título para pontuar (sem limite de posição no texto)
     tit_palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", titulo.lower())
-                    if p not in _STOPWORDS][:5]
+                    if p not in _STOPWORDS][:10]
     candidatos = []
     for nome, texto in material.items():
         score = 0
         tl = texto.lower()
-        if sob_l in nome.lower(): score += 10
-        if ano in nome:           score += 5
-        if sob_l in tl:           score += 3
-        if ano in texto:          score += 2
+        if sob_l in nome.lower():  score += 10
+        if ano in nome:            score += 5
+        if sob_l in tl:            score += 3
+        if ano in texto:           score += 2
         for p in tit_palavras:
-            if p in tl[:2000]:    score += 1
+            if p in tl:            score += 1   # busca em TODO o texto, não só os primeiros 2000 chars
         if score > 0:
             candidatos.append((score, nome, texto))
     if not candidatos:
@@ -420,14 +441,14 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
         trecho = _trecho_relevante(cit.contexto, texto_fonte)
         prompt = _PROMPT_CLAUDE.format(
             citacao=cit.texto,
-            contexto=cit.contexto[:600],
-            referencia=ref.texto[:150],
+            contexto=cit.contexto[:1200],   # contexto maior da dissertação
+            referencia=ref.texto[:300],
             arquivo=arquivo,
             fonte=trecho,
         )
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=512,
+            max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
