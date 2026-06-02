@@ -13,6 +13,7 @@ Requisitos mínimos:
   pip install python-docx      (fallback para .docx; normalmente não precisa)
 """
 
+import base64
 import json
 import os
 import re
@@ -412,15 +413,126 @@ def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict) -> tupl
     return nome_m, texto_m
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ENVIO DE ARQUIVOS NATIVOS AO CLAUDE (PDF como documento, DOCX como texto)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_MAX_PDF_BYTES       = 28 * 1_000_000   # 28 MB por bloco (limite API ~32 MB)
+_MAX_PAGES_PER_BLOCO = 50               # páginas por bloco de documento
+_MAX_BLOCOS          = 8                # máximo de blocos por chamada
+
+
+def _bloco_pdf(pdf_bytes: bytes, titulo: str) -> dict:
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": base64.standard_b64encode(pdf_bytes).decode("ascii"),
+        },
+        "title": titulo,
+    }
+
+
+def _pdf_para_blocos(caminho: Path, contexto: str = "") -> list:
+    """
+    Converte um PDF em blocos de documento para a API do Claude.
+    - PDF pequeno (≤ MAX_BYTES e ≤ MAX_PAGES): um único bloco com tudo.
+    - PDF grande: seleciona as páginas mais relevantes ao contexto,
+      divide em blocos de MAX_PAGES_PER_BLOCO e envia tudo que couber.
+    Retorna lista de content-blocks prontos para incluir na mensagem.
+    """
+    try:
+        with open(str(caminho), "rb") as f:
+            raw = f.read()
+    except Exception:
+        return []
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        # Sem PyMuPDF: envia inteiro se couber, senão retorna vazio
+        if len(raw) <= _MAX_PDF_BYTES:
+            return [_bloco_pdf(raw, caminho.name)]
+        return []
+
+    try:
+        doc = fitz.open(stream=raw, filetype="pdf")
+        n_pages = len(doc)
+
+        # PDF pequeno o suficiente para enviar inteiro
+        if len(raw) <= _MAX_PDF_BYTES and n_pages <= _MAX_PAGES_PER_BLOCO * _MAX_BLOCOS:
+            doc.close()
+            return [_bloco_pdf(raw, caminho.name)]
+
+        # PDF grande — seleciona páginas mais relevantes
+        if contexto:
+            palavras = {p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", contexto.lower())
+                        if p not in _STOPWORDS}
+            scored = sorted(range(n_pages),
+                            key=lambda i: -sum(1 for w in palavras
+                                               if w in doc[i].get_text().lower()))
+            selecionadas: set[int] = set()
+            for pag in scored[:_MAX_PAGES_PER_BLOCO * _MAX_BLOCOS // 2]:
+                for d in range(-3, 4):
+                    p = pag + d
+                    if 0 <= p < n_pages:
+                        selecionadas.add(p)
+            paginas = sorted(selecionadas)[:_MAX_PAGES_PER_BLOCO * _MAX_BLOCOS]
+        else:
+            paginas = list(range(min(n_pages, _MAX_PAGES_PER_BLOCO * _MAX_BLOCOS)))
+
+        # Monta sub-PDFs por bloco de páginas
+        blocos = []
+        for start in range(0, len(paginas), _MAX_PAGES_PER_BLOCO):
+            chunk = paginas[start:start + _MAX_PAGES_PER_BLOCO]
+            sub = fitz.open()
+            for p in chunk:
+                sub.insert_pdf(doc, from_page=p, to_page=p)
+            pdf_chunk = sub.tobytes()
+            sub.close()
+            titulo = (f"{caminho.name} "
+                      f"(págs {chunk[0]+1}–{chunk[-1]+1} de {n_pages})")
+            blocos.append(_bloco_pdf(pdf_chunk, titulo))
+
+        doc.close()
+        return blocos
+
+    except Exception:
+        # Qualquer falha: tenta enviar o raw se couber
+        if len(raw) <= _MAX_PDF_BYTES:
+            return [_bloco_pdf(raw, caminho.name)]
+        return []
+
+
 _PROMPT_CLAUDE = """Você é um verificador de integridade acadêmica.
 
 TRECHO DA DISSERTAÇÃO com a citação {citacao}:
 \"\"\"{contexto}\"\"\"
 
 REFERÊNCIA BIBLIOGRÁFICA: {referencia}
-ARQUIVO FONTE: {arquivo}
+ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
 
-{cabecalho_fonte}
+O conteúdo da obra está anexado acima como documento(s).
+
+Analise:
+1. O argumento da dissertação é coerente com o que a obra realmente afirma?
+2. Há distorção de sentido, generalização ou uso fora de contexto?
+3. A ideia atribuída ao autor consta na obra?
+
+Responda SOMENTE com JSON (sem markdown):
+{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "frase curta", "trecho_fonte": "trecho real da obra até 150 chars"}}
+"""
+
+_PROMPT_CLAUDE_TEXTO = """Você é um verificador de integridade acadêmica.
+
+TRECHO DA DISSERTAÇÃO com a citação {citacao}:
+\"\"\"{contexto}\"\"\"
+
+REFERÊNCIA BIBLIOGRÁFICA: {referencia}
+ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
+
+CONTEÚDO DA OBRA:
 \"\"\"{fonte}\"\"\"
 
 Analise:
@@ -432,41 +544,61 @@ Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "frase curta", "trecho_fonte": "trecho real da obra até 150 chars"}}
 """
 
-# Limite prático: abaixo deste valor envia o arquivo INTEIRO ao Claude.
-# Acima disso (livros muito longos) seleciona as seções mais relevantes.
-# 150 000 chars ≈ 37 500 tokens — bem abaixo do limite de 200K do claude-sonnet-4-6.
-_LIMITE_FONTE_COMPLETA = 150_000
+_LIMITE_TEXTO_COMPLETO = 150_000   # chars (~37 500 tokens) para fallback em texto
 
 
 def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
-                     texto_fonte: str, api_key: str) -> dict:
+                     arq_path: Optional[Path], texto_fonte: str,
+                     api_key: str) -> dict:
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
 
-        if len(texto_fonte) <= _LIMITE_FONTE_COMPLETA:
-            # Arquivo cabe inteiro — envia tudo, sem cortes
-            fonte_final = texto_fonte
-            cabecalho = "CONTEÚDO COMPLETO DA OBRA CITADA:"
-        else:
-            # Arquivo muito grande (livro completo) — seleciona trechos relevantes
-            fonte_final = _trecho_relevante(cit.contexto, texto_fonte, janela=_LIMITE_FONTE_COMPLETA)
-            tamanho_kb = len(texto_fonte) // 1024
-            cabecalho = (f"TRECHOS RELEVANTES DA OBRA CITADA "
-                         f"(arquivo {tamanho_kb} KB — seleção dos trechos mais pertinentes):")
+        ext = arq_path.suffix.lower() if arq_path else ""
+        blocos_doc: list = []
+        modo = ""
 
-        prompt = _PROMPT_CLAUDE.format(
-            citacao=cit.texto,
-            contexto=cit.contexto[:1200],
-            referencia=ref.texto[:300],
-            arquivo=arquivo,
-            cabecalho_fonte=cabecalho,
-            fonte=fonte_final,
-        )
+        # ── Tenta enviar o arquivo nativo (PDF direto) ──────────────────
+        if ext == ".pdf" and arq_path and arq_path.exists():
+            blocos_doc = _pdf_para_blocos(arq_path, cit.contexto)
+            if blocos_doc:
+                n_pag_info = f"{len(blocos_doc)} bloco(s)"
+                modo = f"PDF nativo — {n_pag_info}"
+
+        # ── Fallback: texto extraído ─────────────────────────────────────
+        if not blocos_doc:
+            if len(texto_fonte) <= _LIMITE_TEXTO_COMPLETO:
+                fonte_txt = texto_fonte
+                modo = "texto completo"
+            else:
+                fonte_txt = _trecho_relevante(cit.contexto, texto_fonte,
+                                              janela=_LIMITE_TEXTO_COMPLETO)
+                modo = f"texto — seleção ({len(texto_fonte)//1024} KB total)"
+
+            prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
+                citacao=cit.texto,
+                contexto=cit.contexto[:1200],
+                referencia=ref.texto[:300],
+                arquivo=arquivo,
+                modo_leitura=modo,
+                fonte=fonte_txt,
+            )
+            content = [{"type": "text", "text": prompt_txt}]
+        else:
+            # PDF nativo: documentos + prompt de análise
+            prompt_txt = _PROMPT_CLAUDE.format(
+                citacao=cit.texto,
+                contexto=cit.contexto[:1200],
+                referencia=ref.texto[:300],
+                arquivo=arquivo,
+                modo_leitura=modo,
+            )
+            content = blocos_doc + [{"type": "text", "text": prompt_txt}]
+
         resp = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content}],
         )
         raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
         try:
@@ -480,7 +612,7 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                     pass
         return {"veredicto": "ERRO", "justificativa": raw[:200], "trecho_fonte": ""}
     except Exception as e:
-        return {"veredicto": "ERRO", "justificativa": str(e)[:150], "trecho_fonte": ""}
+        return {"veredicto": "ERRO", "justificativa": str(e)[:200], "trecho_fonte": ""}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -634,7 +766,8 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
     L(f"  {len(arquivos)} arquivo(s) encontrado(s) na pasta")
     L("")
 
-    material = {}
+    material       = {}   # nome → texto extraído  (para matching)
+    material_paths = {}   # nome → Path            (para envio nativo ao Claude)
     for i, arq in enumerate(arquivos, 1):
         if stop_fn and stop_fn():
             L("\n[INTERROMPIDO]")
@@ -642,8 +775,10 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         t = ler_arquivo(arq)
         ok = t and len(t) > 50 and not t.startswith("[")
         if ok:
-            material[arq.name] = t
-            L(f"  [{i:>3}/{len(arquivos)}] ✓ {arq.name}  ({len(t):,} chars)")
+            material[arq.name]       = t
+            material_paths[arq.name] = arq
+            tipo = "PDF" if arq.suffix.lower() == ".pdf" else arq.suffix.upper().lstrip(".")
+            L(f"  [{i:>3}/{len(arquivos)}] ✓ {arq.name}  ({len(t):,} chars, {tipo})")
         else:
             L(f"  [{i:>3}/{len(arquivos)}] ✗ {arq.name}  — falha na leitura")
 
@@ -679,12 +814,12 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                 L("\n[INTERROMPIDO]")
                 break
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
-            modo = ("completo" if txt and len(txt) <= _LIMITE_FONTE_COMPLETA
-                    else "seleção") if txt else "—"
-            tam = f"{len(txt)//1024} KB" if txt else "—"
+            arq_path = material_paths.get(arq) if arq else None
+            ext = arq_path.suffix.lower() if arq_path else ""
+            tam = f"{arq_path.stat().st_size // 1024} KB" if arq_path else "—"
             L(f"  [{i:>3}/{len(pareamentos)}] {cit.texto[:70]}")
             if txt:
-                L(f"         → fonte: {arq}  ({tam}, leitura {modo})")
+                L(f"         → fonte: {arq}  ({tam})")
             if not txt:
                 L(f"         → arquivo não encontrado para {ref.sobrenome} ({ref.ano})")
                 verificacoes.append({
@@ -695,7 +830,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                     "trecho_fonte": "",
                 })
                 continue
-            v = verificar_claude(cit, ref, arq, txt, api_key)
+            v = verificar_claude(cit, ref, arq, arq_path, txt, api_key)
             emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠",
                      "SEM_FONTE": "?", "ERRO": "!"}.get(v.get("veredicto", ""), "?")
             L(f"         {emoji} {v.get('veredicto')} — {v.get('justificativa','')[:80]}")
