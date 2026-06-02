@@ -180,10 +180,32 @@ def _split_citacoes_combinadas(para: str) -> str:
     return re.sub(r'\(([^)]+)\)', split_paren, para)
 
 
-def encontrar_citacoes(texto: str):
+def encontrar_citacoes(texto: str, log_fn=None):
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
     paragrafos = texto.split("\n")
-    idx_refs = next((i for i, p in enumerate(paragrafos) if _RE_INICIO_REFS.match(p.strip())), -1)
-    limite = idx_refs if idx_refs > 0 else len(paragrafos)
+    total_paras = len(paragrafos)
+
+    # Use the LAST occurrence of the REFERÊNCIAS heading — TOC entries appear
+    # at the top and would give a near-zero scanning window if taken first.
+    ocorrencias = [i for i, p in enumerate(paragrafos) if _RE_INICIO_REFS.match(p.strip())]
+    if ocorrencias:
+        # If multiple matches, prefer one in the latter half of the document
+        metade = total_paras // 2
+        tardios = [i for i in ocorrencias if i >= metade]
+        idx_refs = tardios[-1] if tardios else ocorrencias[-1]
+    else:
+        idx_refs = -1
+
+    limite = idx_refs if idx_refs > 0 else total_paras
+    _log(f"  [DIAG] Total parágrafos: {total_paras} | "
+         f"idx_refs={idx_refs} | varredura: parágrafos 0–{limite-1}")
+    if ocorrencias and len(ocorrencias) > 1:
+        _log(f"  [DIAG] 'REFERÊNCIAS' encontrado {len(ocorrencias)}× nas linhas: "
+             f"{ocorrencias} — usando última ocorrência após a metade ({idx_refs})")
+
     citacoes, vistos = [], set()
 
     for idx, para in enumerate(paragrafos[:limite]):
@@ -203,6 +225,16 @@ def encontrar_citacoes(texto: str):
             if (k := (tuple(aut), ano)) not in vistos:
                 vistos.add(k)
                 citacoes.append(Citacao(m.group(0), aut, ano, pag, ctx, idx))
+
+    if not citacoes and limite > 50:
+        com_parens = sum(1 for p in paragrafos[:limite] if '(' in p and ')' in p)
+        _log(f"  [DIAG] Parágrafos com parênteses na área varrida: {com_parens} de {limite}")
+        _log("  [DIAG] Amostra dos primeiros 20 parágrafos não-vazios:")
+        conta = 0
+        for p in paragrafos[:limite]:
+            if p.strip() and conta < 20:
+                _log(f"    | {p[:120]}")
+                conta += 1
 
     return citacoes, idx_refs
 
@@ -542,7 +574,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
 
     L("")
     L("  Identificando citações e referências na dissertação…")
-    citacoes, idx_refs = encontrar_citacoes(texto)
+    citacoes, idx_refs = encontrar_citacoes(texto, log_fn=L)
     L(f"  ✓ {len(citacoes)} citação(ões) encontrada(s)")
     if idx_refs >= 0:
         L(f"  ✓ Seção REFERÊNCIAS encontrada (linha {idx_refs})")
@@ -845,7 +877,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas.")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
