@@ -114,7 +114,7 @@ class Referencia:
     titulo: str
 
 
-_SOBR = r"[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\.']{1,}"
+_SOBR = r"[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\.'){1,}"
 _ANO  = r"\d{4}[a-z]?"
 _PAG  = r"(?:[,;:\s]+(?:p\.?p?|pág\.?|f\.?)\s*([\d\-–]+))?"
 _AUTORES_CAP = (
@@ -224,7 +224,7 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
         sobrenomes = _sobrenomes_ref(t)
         m_ano = _RE_ANO_PLAUSIVEL.search(t)
         ano = m_ano.group(1) if m_ano else "s.d."
-        m_tit = re.search(r"\.\s+([A-Z][^\.\n]{5,})", t)
+        m_tit = re.search(r"\.\s+([A-Z][^.\n]{5,})", t)
         titulo = m_tit.group(1)[:80] if m_tit else t[:80]
         return Referencia(t, sobrenomes[0], sobrenomes, ano, titulo)
 
@@ -432,6 +432,15 @@ def gerar_html(resultado: dict) -> str:
                 f'<details><summary><small>ver contexto</small></summary>'
                 f'<small>{e(v.get("contexto","")[:300])}</small></details>')
 
+    n_cit = len(resultado["citacoes"])
+    n_ref = len(resultado["referencias"])
+    n_par = len(pareamentos)
+    n_csr = len(citadas_sr)
+    n_rsc = len(refs_sc)
+    n_ok  = len(corretas)
+    n_par2 = len(parciais)
+    n_err = len(incorretas)
+
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR"><head><meta charset="UTF-8">
 <title>Verificador de Citações</title>
@@ -453,41 +462,40 @@ blockquote {{margin:.5em 0;padding:.5em 1em;background:#eef3ff;border-left:4px s
 details summary {{cursor:pointer;color:#666;font-size:.85em;margin-top:.3em}}
 small {{color:#555;font-size:.85em}}
 </style></head><body>
-<h1>📚 Verificador de Citações Acadêmicas</h1>
-<p>Gerado em <b>{e(ts)}</b> &nbsp;|&nbsp; Arquivo: <em>{e(diss_path)}</em></p>
-
+<h1>Verificador de Citações Acadêmicas</h1>
+<p>Gerado em <b>{e(ts)}</b> | Arquivo: <em>{e(diss_path)}</em></p>
 <div class="resumo">
-  <div class="card" style="border-color:#3498db"><b>{len(resultado["citacoes"])}</b>Citações<br>encontradas</div>
-  <div class="card" style="border-color:#8e44ad"><b>{len(resultado["referencias"])}</b>Referências<br>na lista</div>
-  <div class="card" style="border-color:#27ae60"><b>{len(pareamentos)}</b>Pares<br>citação↔ref</div>
-  <div class="card" style="border-color:#e74c3c"><b>{len(citadas_sr)}</b>Cit. sem<br>referência</div>
-  <div class="card" style="border-color:#e67e22"><b>{len(refs_sc)}</b>Ref. sem<br>citação</div>
-  <div class="card" style="border-color:#27ae60"><b>{len(corretas)}</b>Verificadas<br>OK</div>
-  <div class="card" style="border-color:#f39c12"><b>{len(parciais)}</b>Parciais</div>
-  <div class="card" style="border-color:#e74c3c"><b>{len(incorretas)}</b>Incorretas</div>
+  <div class="card" style="border-color:#3498db"><b>{n_cit}</b>Citações<br>encontradas</div>
+  <div class="card" style="border-color:#8e44ad"><b>{n_ref}</b>Referências<br>na lista</div>
+  <div class="card" style="border-color:#27ae60"><b>{n_par}</b>Pares<br>citação-ref</div>
+  <div class="card" style="border-color:#e74c3c"><b>{n_csr}</b>Cit. sem<br>referência</div>
+  <div class="card" style="border-color:#e67e22"><b>{n_rsc}</b>Ref. sem<br>citação</div>
+  <div class="card" style="border-color:#27ae60"><b>{n_ok}</b>Verificadas<br>OK</div>
+  <div class="card" style="border-color:#f39c12"><b>{n_par2}</b>Parciais</div>
+  <div class="card" style="border-color:#e74c3c"><b>{n_err}</b>Incorretas</div>
 </div>
 """
 
-    html += secao("⚠ Citações SEM referência na lista bibliográfica", citadas_sr, "#e74c3c",
+    html += secao("Citacoes SEM referencia na lista bibliografica", citadas_sr, "#e74c3c",
         lambda c: (f'<b class="err">{e(c.texto)}</b>'
                    f'<details><summary><small>ver contexto</small></summary>'
                    f'<small>{e(c.contexto[:350])}</small></details>'))
 
-    html += secao("⚠ Referências listadas SEM citação no texto", refs_sc, "#e67e22",
+    html += secao("Referencias listadas SEM citacao no texto", refs_sc, "#e67e22",
         lambda r: f'<span class="warn">{e(r.texto[:250])}</span>')
 
     if incorretas:
-        html += secao("✗ INCORRETAS — argumento diverge da obra", incorretas, "#c0392b", card)
+        html += secao("INCORRETAS - argumento diverge da obra", incorretas, "#c0392b", card)
     if parciais:
-        html += secao("~ PARCIAIS — citação com ressalvas", parciais, "#d35400", card)
+        html += secao("PARCIAIS - citacao com ressalvas", parciais, "#d35400", card)
     if corretas:
-        html += secao("✓ CORRETAS — confirmadas pela obra", corretas, "#27ae60", card)
+        html += secao("CORRETAS - confirmadas pela obra", corretas, "#27ae60", card)
     if sem_fonte:
-        html += secao("? SEM FONTE — arquivo não encontrado na pasta", sem_fonte, "#7f8c8d", card)
+        html += secao("SEM FONTE - arquivo nao encontrado na pasta", sem_fonte, "#7f8c8d", card)
 
     if not verifics and pareamentos:
-        html += f'<h2 style="color:#3498db">✓ Citações pareadas com referências ({len(pareamentos)})</h2>'
-        html += '<p><em>Sem verificação semântica — informe a chave de API Claude para verificar a coerência dos argumentos.</em></p><ul>'
+        html += f'<h2 style="color:#3498db">Citacoes pareadas com referencias ({n_par})</h2>'
+        html += '<p><em>Sem verificacao semantica - informe a chave de API Claude para verificar a coerencia dos argumentos.</em></p><ul>'
         for c, r in pareamentos:
             html += (f'<li class="info"><b>{e(c.texto)}</b>'
                      f'<br><small>Ref.: {e(r.texto[:180])}</small>'
@@ -508,13 +516,13 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn, stop_fn=None) 
         log_fn(msg)
 
     L("=" * 65)
-    L("ETAPA 1 — Lendo a dissertação")
+    L("ETAPA 1 - Lendo a dissertacao")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
-    L(f"✓ {len(texto):,} caracteres extraídos")
+    L(f"  {len(texto):,} caracteres extraidos")
     if len(texto) < 300:
-        L("⚠ ERRO: texto muito curto! O arquivo pode ser uma imagem escaneada.")
-        L(f"  Conteúdo encontrado: {repr(texto[:200])}")
+        L("ERRO: texto muito curto! O arquivo pode ser uma imagem escaneada.")
+        L(f"  Conteudo encontrado: {repr(texto[:200])}")
         return None
 
     L("  Primeiras linhas:")
@@ -523,20 +531,20 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn, stop_fn=None) 
             L(f"  | {linha[:100]}")
 
     L("")
-    L("  Identificando citações e referências na dissertação…")
+    L("  Identificando citacoes e referencias na dissertacao...")
     citacoes, idx_refs = encontrar_citacoes(texto)
-    L(f"  ✓ {len(citacoes)} citação(ões) encontrada(s)")
+    L(f"  {len(citacoes)} citacao(oes) encontrada(s)")
     if idx_refs >= 0:
-        L(f"  ✓ Seção REFERÊNCIAS encontrada (linha {idx_refs})")
+        L(f"  Secao REFERENCIAS encontrada (linha {idx_refs})")
     else:
-        L("  ⚠ Seção REFERÊNCIAS não encontrada no arquivo!")
+        L("  ATENCAO: Secao REFERENCIAS nao encontrada no arquivo!")
 
     referencias = extrair_referencias(texto, idx_refs)
-    L(f"  ✓ {len(referencias)} entrada(s) na lista de referências")
+    L(f"  {len(referencias)} entrada(s) na lista de referencias")
 
     L("")
     L("=" * 65)
-    L("ETAPA 2 — Lendo arquivos de apoio (um a um)")
+    L("ETAPA 2 - Lendo arquivos de apoio (um a um)")
     L("=" * 65)
     extensoes = {".pdf", ".docx", ".doc", ".txt"}
     arquivos = sorted(
@@ -555,36 +563,36 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn, stop_fn=None) 
         ok = t and len(t) > 50 and not t.startswith("[")
         if ok:
             material[arq.name] = t
-            L(f"  [{i:>3}/{len(arquivos)}] ✓ {arq.name}  ({len(t):,} chars)")
+            L(f"  [{i:>3}/{len(arquivos)}]  {arq.name}  ({len(t):,} chars)")
         else:
-            L(f"  [{i:>3}/{len(arquivos)}] ✗ {arq.name}  — falha na leitura")
+            L(f"  [{i:>3}/{len(arquivos)}]  {arq.name}  -- falha na leitura")
 
-    L(f"\n  ✓ {len(material)} arquivo(s) lido(s) com sucesso")
+    L(f"\n  {len(material)} arquivo(s) lido(s) com sucesso")
 
     L("")
     L("=" * 65)
-    L("ETAPA 3 — Cruzando citações com referências")
+    L("ETAPA 3 - Cruzando citacoes com referencias")
     L("=" * 65)
     cruzamento = cruzar(citacoes, referencias)
     pareamentos      = cruzamento["pareamentos"]
     citadas_sem_ref  = cruzamento["citadas_sem_ref"]
     refs_sem_citacao = cruzamento["refs_sem_citacao"]
-    L(f"  ✓ Pares encontrados:             {len(pareamentos)}")
-    L(f"  ✓ Citadas SEM referência:        {len(citadas_sem_ref)}")
-    L(f"  ✓ Referências SEM citação:       {len(refs_sem_citacao)}")
+    L(f"  Pares encontrados:          {len(pareamentos)}")
+    L(f"  Citadas SEM referencia:     {len(citadas_sem_ref)}")
+    L(f"  Referencias SEM citacao:    {len(refs_sem_citacao)}")
 
     if citadas_sem_ref:
-        L("\n  Citações sem referência:")
+        L("\n  Citacoes sem referencia:")
         for c in citadas_sem_ref[:10]:
-            L(f"    → {c.texto}")
+            L(f"    -> {c.texto}")
         if len(citadas_sem_ref) > 10:
-            L(f"    … e mais {len(citadas_sem_ref) - 10}")
+            L(f"    ... e mais {len(citadas_sem_ref) - 10}")
 
     verificacoes = []
     if api_key.strip() and material and pareamentos:
         L("")
         L("=" * 65)
-        L(f"ETAPA 4 — Verificando coerência argumentativa ({len(pareamentos)} citações)")
+        L(f"ETAPA 4 - Verificando coerencia argumentativa ({len(pareamentos)} citacoes)")
         L("=" * 65)
         for i, (cit, ref) in enumerate(pareamentos, 1):
             if stop_fn and stop_fn():
@@ -593,19 +601,19 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn, stop_fn=None) 
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
             L(f"  [{i:>3}/{len(pareamentos)}] {cit.texto[:70]}")
             if not txt:
-                L(f"         → arquivo não encontrado para {ref.sobrenome} ({ref.ano})")
+                L(f"         -> arquivo nao encontrado para {ref.sobrenome} ({ref.ano})")
                 verificacoes.append({
                     "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
                     "contexto": cit.contexto, "referencia": ref.texto,
                     "arquivo_fonte": "", "veredicto": "SEM_FONTE",
-                    "justificativa": f"Arquivo de {ref.sobrenome} ({ref.ano}) não encontrado na pasta",
+                    "justificativa": f"Arquivo de {ref.sobrenome} ({ref.ano}) nao encontrado na pasta",
                     "trecho_fonte": "",
                 })
                 continue
             v = verificar_claude(cit, ref, arq, txt, api_key)
-            emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠",
+            emoji = {"CORRETO": "OK", "INCORRETO": "ERRO", "PARCIAL": "PARCIAL",
                      "SEM_FONTE": "?", "ERRO": "!"}.get(v.get("veredicto", ""), "?")
-            L(f"         {emoji} {v.get('veredicto')} — {v.get('justificativa','')[:80]}")
+            L(f"         {emoji} {v.get('veredicto')} -- {v.get('justificativa','')[:80]}")
             verificacoes.append({
                 "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
                 "contexto": cit.contexto, "referencia": ref.texto,
@@ -613,8 +621,8 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn, stop_fn=None) 
             })
     elif not api_key.strip():
         L("")
-        L("  [Sem chave API — verificação semântica não realizada]")
-        L("  [Para verificar a coerência dos argumentos, informe a chave Anthropic]")
+        L("  [Sem chave API -- verificacao semantica nao realizada]")
+        L("  [Para verificar a coerencia dos argumentos, informe a chave Anthropic]")
 
     return {
         "citacoes":        citacoes,
@@ -639,81 +647,71 @@ def _iniciar_gui():
     _resultado = {}
 
     janela = tk.Tk()
-    janela.title("Verificador de Citações Acadêmicas")
+    janela.title("Verificador de Citacoes Academicas")
     janela.geometry("820x680")
     janela.resizable(True, True)
-    try:
-        janela.iconbitmap(default="")
-    except Exception:
-        pass
 
-    # ── Painel superior ──────────────────────────────────────────────────
     topo = tk.Frame(janela, bg="#1a2744", padx=12, pady=10)
     topo.pack(fill="x")
-    tk.Label(topo, text="📚  Verificador de Citações Acadêmicas",
+    tk.Label(topo, text="Verificador de Citacoes Academicas",
              bg="#1a2744", fg="white", font=("Arial", 15, "bold")).pack(anchor="w")
-    tk.Label(topo, text="Lê a dissertação · Lê os arquivos de apoio · Cruza e verifica",
+    tk.Label(topo, text="Le a dissertacao · Le os arquivos de apoio · Cruza e verifica",
              bg="#1a2744", fg="#aac", font=("Arial", 10)).pack(anchor="w")
 
-    # ── Formulário ───────────────────────────────────────────────────────
     form = tk.Frame(janela, padx=16, pady=10)
     form.pack(fill="x")
 
-    var_diss  = tk.StringVar()
-    var_refs  = tk.StringVar()
-    var_api   = tk.StringVar()
-    var_sem   = tk.BooleanVar(value=False)
+    var_diss = tk.StringVar()
+    var_refs = tk.StringVar()
+    var_api  = tk.StringVar()
+    var_sem  = tk.BooleanVar(value=False)
 
     def _campo(parent, texto, var, comando, row):
         tk.Label(parent, text=texto, anchor="w", font=("Arial", 10, "bold")).grid(
             row=row, column=0, sticky="w", pady=4)
         tk.Entry(parent, textvariable=var, width=58, font=("Arial", 10)).grid(
             row=row, column=1, padx=(6, 4), pady=4, sticky="ew")
-        tk.Button(parent, text="Procurar…", command=comando,
+        tk.Button(parent, text="Procurar...", command=comando,
                   font=("Arial", 9)).grid(row=row, column=2, pady=4)
 
     def escolher_diss():
         p = filedialog.askopenfilename(
-            title="Selecione a dissertação",
+            title="Selecione a dissertacao",
             filetypes=[("Word", "*.docx *.doc"), ("Todos", "*.*")])
         if p:
             var_diss.set(p)
 
     def escolher_refs():
-        p = filedialog.askdirectory(title="Selecione a pasta com os arquivos de referência")
+        p = filedialog.askdirectory(title="Selecione a pasta com os arquivos de referencia")
         if p:
             var_refs.set(p)
 
     form.columnconfigure(1, weight=1)
-    _campo(form, "Dissertação (.docx):", var_diss, escolher_diss, 0)
-    _campo(form, "Pasta de referências:", var_refs, escolher_refs, 1)
+    _campo(form, "Dissertacao (.docx):", var_diss, escolher_diss, 0)
+    _campo(form, "Pasta de referencias:", var_refs, escolher_refs, 1)
 
     tk.Label(form, text="Chave API Claude\n(opcional):", anchor="w",
              font=("Arial", 10, "bold")).grid(row=2, column=0, sticky="w", pady=4)
-    tk.Entry(form, textvariable=var_api, width=58, font=("Arial", 10),
-             show="•").grid(row=2, column=1, padx=(6, 4), pady=4, sticky="ew")
+    e_api = tk.Entry(form, textvariable=var_api, width=58, font=("Arial", 10), show="*")
+    e_api.grid(row=2, column=1, padx=(6, 4), pady=4, sticky="ew")
     tk.Button(form, text="Ver/Ocultar",
-              command=lambda: e_api.config(show="" if e_api.cget("show") == "•" else "•"),
+              command=lambda: e_api.config(show="" if e_api.cget("show") == "*" else "*"),
               font=("Arial", 9)).grid(row=2, column=2, pady=4)
 
-    # Substituir a entry genérica pela que tem referência
-    e_api = form.grid_slaves(row=2, column=1)[0]
-
-    tk.Checkbutton(form, text="Apenas cruzamento (sem verificação IA, mais rápido)",
+    tk.Checkbutton(form, text="Apenas cruzamento (sem verificacao IA, mais rapido)",
                    variable=var_sem, font=("Arial", 10)).grid(
         row=3, column=0, columnspan=3, sticky="w", pady=(2, 0))
 
-    # ── Botões de ação ───────────────────────────────────────────────────
     btn_frame = tk.Frame(janela, padx=16)
     btn_frame.pack(fill="x")
 
-    btn_iniciar = tk.Button(btn_frame, text="▶  Iniciar análise",
+    btn_iniciar = tk.Button(btn_frame, text="Iniciar analise",
                             font=("Arial", 11, "bold"), bg="#27ae60", fg="white",
                             padx=14, pady=6)
-    btn_parar   = tk.Button(btn_frame, text="⏹  Parar",
+    btn_parar   = tk.Button(btn_frame, text="Parar",
                             font=("Arial", 11), bg="#e74c3c", fg="white",
                             padx=14, pady=6, state="disabled")
-    btn_relat   = tk.Button(btn_frame, text="🌐  Abrir relatório HTML",
+    btn_relat   = tk.Button(btn_frame, text="Abrir relatorio HTML",
                             font=("Arial", 11), bg="#2980b9", fg="white",
                             padx=14, pady=6, state="disabled")
 
@@ -721,12 +719,10 @@ def _iniciar_gui():
     btn_parar.pack(side="left", padx=(0, 8), pady=8)
     btn_relat.pack(side="left", pady=8)
 
-    # ── Barra de progresso ───────────────────────────────────────────────
     prog_var = tk.DoubleVar()
     prog_bar = ttk.Progressbar(janela, variable=prog_var, mode="indeterminate")
     prog_bar.pack(fill="x", padx=16, pady=(0, 4))
 
-    # ── Log ──────────────────────────────────────────────────────────────
     log_area = scrolledtext.ScrolledText(janela, font=("Consolas", 9),
                                          bg="#1e1e1e", fg="#d4d4d4",
                                          insertbackground="white", wrap="word")
@@ -750,10 +746,10 @@ def _iniciar_gui():
         diss = var_diss.get().strip()
         refs = var_refs.get().strip()
         if not diss or not Path(diss).exists():
-            messagebox.showerror("Erro", "Selecione um arquivo de dissertação válido.")
+            messagebox.showerror("Erro", "Selecione um arquivo de dissertacao valido.")
             return
         if not refs or not Path(refs).is_dir():
-            messagebox.showerror("Erro", "Selecione uma pasta de referências válida.")
+            messagebox.showerror("Erro", "Selecione uma pasta de referencias valida.")
             return
 
         _parar.clear()
@@ -781,24 +777,24 @@ def _iniciar_gui():
                     _resultado["html_path"] = str(saida).replace("\\", "/")
                     log("")
                     log("=" * 65)
-                    log("✓ ANÁLISE CONCLUÍDA!")
-                    log(f"  Relatório salvo em: {saida}")
+                    log("ANALISE CONCLUIDA!")
+                    log(f"  Relatorio salvo em: {saida}")
                     log("=" * 65)
                     def _ativar():
                         btn_relat.configure(state="normal")
                         prog_bar.stop()
                         prog_var.set(100)
-                        messagebox.showinfo("Concluído",
-                            f"Análise finalizada!\n\n"
-                            f"• {len(resultado['citacoes'])} citações encontradas\n"
-                            f"• {len(resultado['referencias'])} referências na lista\n"
-                            f"• {len(resultado['pareamentos'])} pares citação↔referência\n"
-                            f"• {len(resultado['citadas_sem_ref'])} citadas sem referência\n"
-                            f"• {len(resultado['refs_sem_citacao'])} referências sem citação\n\n"
-                            f"Relatório salvo em:\n{saida}")
+                        messagebox.showinfo("Concluido",
+                            f"Analise finalizada!\n\n"
+                            f"- {len(resultado['citacoes'])} citacoes encontradas\n"
+                            f"- {len(resultado['referencias'])} referencias na lista\n"
+                            f"- {len(resultado['pareamentos'])} pares citacao/referencia\n"
+                            f"- {len(resultado['citadas_sem_ref'])} citadas sem referencia\n"
+                            f"- {len(resultado['refs_sem_citacao'])} referencias sem citacao\n\n"
+                            f"Relatorio salvo em:\n{saida}")
                     janela.after(0, _ativar)
                 else:
-                    log("\n[Análise não concluída — verifique os erros acima]")
+                    log("\n[Analise nao concluida -- verifique os erros acima]")
             except Exception as exc:
                 import traceback
                 log(f"\n[ERRO INESPERADO]\n{traceback.format_exc()}")
@@ -814,16 +810,16 @@ def _iniciar_gui():
     def parar():
         _parar.set()
         btn_parar.configure(state="disabled")
-        log("\n[Solicitando parada…]")
+        log("\n[Solicitando parada...]")
 
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas.")
-    log("1. Selecione o arquivo da dissertação (.docx)")
-    log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
-    log("3. Informe a chave API Claude (opcional) para verificação de coerência")
-    log("4. Clique em 'Iniciar análise'")
+    log("Bem-vindo ao Verificador de Citacoes Academicas.")
+    log("1. Selecione o arquivo da dissertacao (.docx)")
+    log("2. Selecione a pasta com os arquivos de referencia (PDF, DOCX, TXT)")
+    log("3. Informe a chave API Claude (opcional) para verificacao de coerencia")
+    log("4. Clique em Iniciar analise")
     log("")
 
     janela.mainloop()
@@ -840,7 +836,7 @@ def _modo_terminal(diss_path: str, refs_dir: str, api_key: str = ""):
     html_str = gerar_html(resultado)
     saida = Path(diss_path).parent / "relatorio_citacoes.html"
     saida.write_text(html_str, encoding="utf-8")
-    print(f"\nRelatório salvo: {saida}")
+    print(f"\nRelatorio salvo: {saida}")
     webbrowser.open(f"file:///{saida}")
 
 
@@ -859,5 +855,5 @@ if __name__ == "__main__":
         try:
             _iniciar_gui()
         except ImportError:
-            print("tkinter não disponível. Use: python analisar.py dissertacao.docx pasta_refs/")
+            print("tkinter nao disponivel. Use: python analisar.py dissertacao.docx pasta_refs/")
             sys.exit(1)
