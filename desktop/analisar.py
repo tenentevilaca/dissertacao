@@ -250,6 +250,12 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
     paragrafos = texto.split("\n")
     referencias, buffer = [], []
 
+    # Para ao encontrar apêndices/anexos/glossários (não são referências)
+    _RE_FIM_REFS = re.compile(
+        r"^\s*(AP[EÊ]NDICE[S]?|ANEXO[S]?|GLOSS[ÁA]RIO[S]?|QUESTION[ÁA]RIO[S]?)\b",
+        re.IGNORECASE
+    )
+
     _RE_NOVA = re.compile(
         r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}[a-záéíóúâêîôûãõàç\'\-]*\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]"
@@ -260,11 +266,19 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
 
     def _sobrenomes_ref(t: str) -> list:
         cab = re.split(r"\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]", t)[0]
-        resultado = [m.group(1).upper() for m in _RE_AUTORES_REF.finditer(cab) if len(m.group(1)) > 1]
+        resultado = [m.group(1).upper() for m in _RE_AUTORES_REF.finditer(cab)
+                     if len(m.group(1)) > 1]
         if not resultado:
             m = re.match(r"^([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-Za-záéíóúâêîôûãõàç\-\']+)", t)
             if m:
                 resultado = [m.group(1).upper()]
+        # Extrai siglas entre parênteses: "FÓRUM BRASILEIRO (FBSP). ..." → também indexa FBSP
+        # e "OSCE – Organization..." → OSCE já estaria no resultado, mas garante
+        siglas = re.findall(r'\(([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\)', t[:300])
+        _excluir = {'ORG', 'ED', 'COORD', 'TRAD', 'COMP', 'REV'}
+        for s in siglas:
+            if s not in resultado and s not in _excluir:
+                resultado.append(s)
         return resultado or ["DESCONHECIDO"]
 
     def processar(buf: list) -> Optional[Referencia]:
@@ -280,6 +294,13 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
 
     for linha in paragrafos[idx_refs + 1:]:
         linha = linha.strip()
+        # Para ao encontrar início de apêndice/anexo/glossário
+        if _RE_FIM_REFS.match(linha):
+            if buffer:
+                r = processar(buffer)
+                if r:
+                    referencias.append(r)
+            break
         if not linha:
             if buffer:
                 r = processar(buffer)
@@ -354,7 +375,9 @@ def cruzar(citacoes: list, referencias: list) -> dict:
             if chave not in idx_exato:
                 idx_exato[chave] = r
 
-    chaves_citadas, pareamentos, citadas_sem_ref = set(), [], []
+    chaves_citadas: set = set()
+    pareamentos, citadas_sem_ref = [], []
+    ja_pareados: set = set()  # evita duplicatas
 
     for c in citacoes:
         encontrou = False
@@ -362,24 +385,53 @@ def cruzar(citacoes: list, referencias: list) -> dict:
             chave = f"{sob.upper()}_{c.ano}"
             chaves_citadas.add(chave)
 
-            # 1) Busca exata
+            # 1) Busca exata (sobrenome + ano idênticos)
             if chave in idx_exato:
                 ref = idx_exato[chave]
                 for s in ref.sobrenomes:
                     chaves_citadas.add(f"{s.upper()}_{ref.ano}")
-                pareamentos.append((c, ref))
+                par_id = id(ref)
+                if par_id not in ja_pareados:
+                    ja_pareados.add(par_id)
+                    pareamentos.append((c, ref))
                 encontrou = True
                 break
 
-            # 2) Busca fuzzy: mesmo ano + sobrenome similar
+            # 2) Fuzzy: sobrenome similar + mesmo ano
             if not encontrou:
                 for r in referencias:
                     if r.ano == c.ano and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes):
                         for s in r.sobrenomes:
                             chaves_citadas.add(f"{s.upper()}_{r.ano}")
-                        pareamentos.append((c, r))
+                        par_id = id(r)
+                        if par_id not in ja_pareados:
+                            ja_pareados.add(par_id)
+                            pareamentos.append((c, r))
                         encontrou = True
                         break
+
+            # 3) Fuzzy tolerante: sobrenome similar + ano ±1
+            #    Cobre casos como citação (ROULEAU, 2015) vs ref ROULEAU, 2016
+            if not encontrou:
+                try:
+                    ano_cit = int(c.ano[:4])
+                    for r in referencias:
+                        try:
+                            ano_ref = int(r.ano[:4])
+                        except ValueError:
+                            continue
+                        if (abs(ano_cit - ano_ref) <= 1
+                                and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes)):
+                            for s in r.sobrenomes:
+                                chaves_citadas.add(f"{s.upper()}_{r.ano}")
+                            par_id = id(r)
+                            if par_id not in ja_pareados:
+                                ja_pareados.add(par_id)
+                                pareamentos.append((c, r))
+                            encontrou = True
+                            break
+                except (ValueError, TypeError):
+                    pass
 
         if not encontrou:
             citadas_sem_ref.append(c)
@@ -801,7 +853,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v6")
+    L("VERSÃO: 2025-06-02-v7")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -878,18 +930,37 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
             L(f"    … e mais {len(citadas_sem_ref) - 10}")
 
     verificacoes = []
-    if api_key.strip() and not sem_verificacao and material and pareamentos:
+    L("")
+    L("=" * 65)
+    L("ETAPA 4 — Verificação semântica com IA")
+    L("=" * 65)
+    L(f"  Chave API informada:      {'SIM' if api_key.strip() else 'NÃO — sem verificação semântica'}")
+    L(f"  Checkbox 'só cruzamento': {'SIM — semântica desativada' if sem_verificacao else 'não'}")
+    L(f"  Arquivos de apoio lidos:  {len(material)}")
+    L(f"  Pares citação↔referência: {len(pareamentos)}")
+
+    if api_key.strip() and not sem_verificacao and not material:
         L("")
-        L("=" * 65)
-        L(f"ETAPA 4 — Verificando coerência argumentativa ({len(pareamentos)} citações)")
-        L("=" * 65)
+        L("  ⚠ ATENÇÃO: Chave API fornecida mas NENHUM arquivo de apoio lido!")
+        L("  → Coloque os PDFs/DOCXs das obras na pasta de referências.")
+    elif api_key.strip() and not sem_verificacao and material and not pareamentos:
+        L("")
+        L("  ⚠ ATENÇÃO: Há arquivos de apoio mas NENHUM par foi encontrado.")
+        L("  → O cruzamento não encontrou correspondência entre citações e referências.")
+        L("  → Verifique se os anos e sobrenomes das citações batem com as referências.")
+    elif sem_verificacao:
+        L("  [Verificação semântica desativada pelo checkbox]")
+    elif not api_key.strip():
+        L("  [Sem chave API — informe a chave Anthropic no campo correspondente]")
+    elif api_key.strip() and not sem_verificacao and material and pareamentos:
+        L(f"  → Iniciando verificação de {len(pareamentos)} citação(ões)...")
+        L("")
         for i, (cit, ref) in enumerate(pareamentos, 1):
             if stop_fn and stop_fn():
                 L("\n[INTERROMPIDO]")
                 break
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
             arq_path = material_paths.get(arq) if arq else None
-            ext = arq_path.suffix.lower() if arq_path else ""
             tam = f"{arq_path.stat().st_size // 1024} KB" if arq_path else "—"
             L(f"  [{i:>3}/{len(pareamentos)}] {cit.texto[:70]}")
             if txt:
@@ -913,17 +984,6 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                 "contexto": cit.contexto, "referencia": ref.texto,
                 "arquivo_fonte": arq, **v,
             })
-    elif api_key.strip() and not sem_verificacao and not material:
-        L("")
-        L("  ⚠ ATENÇÃO: Chave API fornecida mas nenhum arquivo de apoio lido!")
-        L("  Coloque os PDFs/DOCXs das obras citadas na pasta de referências.")
-    elif sem_verificacao:
-        L("")
-        L("  [Verificação semântica desativada — apenas cruzamento realizado]")
-    elif not api_key.strip():
-        L("")
-        L("  [Sem chave API — verificação semântica não realizada]")
-        L("  [Informe a chave Anthropic para verificar coerência dos argumentos]")
 
     return {
         "citacoes":        citacoes,
@@ -1129,7 +1189,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v6]")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v7]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
