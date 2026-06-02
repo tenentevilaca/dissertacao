@@ -306,33 +306,87 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
 # CRUZAMENTO: citação ↔ referência
 # ═══════════════════════════════════════════════════════════════════════════
 
+import unicodedata as _ucd
+
+def _normalizar(s: str) -> str:
+    return _ucd.normalize("NFD", s.lower()).encode("ascii", "ignore").decode()
+
+def _editar_dist(a: str, b: str) -> int:
+    """Distância de edição (Levenshtein) entre duas strings."""
+    if abs(len(a) - len(b)) > 2:
+        return 99
+    dp = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        prev, dp[0] = dp[0], i
+        for j, cb in enumerate(b, 1):
+            prev, dp[j] = dp[j], prev if ca == cb else 1 + min(prev, dp[j], dp[j-1])
+    return dp[len(b)]
+
+
+def _fuzzy_sobrenome(a: str, b: str) -> bool:
+    """True se os dois sobrenomes são suficientemente similares (tolerância a acentos e grafias)."""
+    na, nb = _normalizar(a), _normalizar(b)
+    if na == nb:
+        return True
+    # Um é prefixo significativo do outro (FERREIRA ↔ FERREIR)
+    curto, longo = (na, nb) if len(na) <= len(nb) else (nb, na)
+    if len(curto) >= 5 and longo.startswith(curto):
+        return True
+    # Distância de edição ≤ 1 para nomes ≥ 5 chars (SOUSA ↔ SOUZA, NÓBREGA ↔ NOBREGA)
+    if len(na) >= 5 and len(nb) >= 5 and _editar_dist(na, nb) <= 1:
+        return True
+    # Jaccard de bigramas ≥ 0.72 para nomes mais longos (≥ 7 chars)
+    if len(na) >= 7 and len(nb) >= 7:
+        def bg(s): return {s[i:i+2] for i in range(len(s)-1)}
+        bga, bgb = bg(na), bg(nb)
+        jaccard = len(bga & bgb) / len(bga | bgb)
+        if jaccard >= 0.72:
+            return True
+    return False
+
+
 def cruzar(citacoes: list, referencias: list) -> dict:
-    idx = {}
+    # Índice exato: "SOBRENOME_ANO" → referência
+    idx_exato: dict = {}
     for r in referencias:
         for sob in r.sobrenomes:
-            chave = f"{sob}_{r.ano}"
-            if chave not in idx:
-                idx[chave] = r
+            chave = f"{sob.upper()}_{r.ano}"
+            if chave not in idx_exato:
+                idx_exato[chave] = r
 
     chaves_citadas, pareamentos, citadas_sem_ref = set(), [], []
 
     for c in citacoes:
         encontrou = False
         for sob in c.autores:
-            chave = f"{sob}_{c.ano}"
+            chave = f"{sob.upper()}_{c.ano}"
             chaves_citadas.add(chave)
-            if chave in idx:
-                ref = idx[chave]
+
+            # 1) Busca exata
+            if chave in idx_exato:
+                ref = idx_exato[chave]
                 for s in ref.sobrenomes:
-                    chaves_citadas.add(f"{s}_{ref.ano}")
+                    chaves_citadas.add(f"{s.upper()}_{ref.ano}")
                 pareamentos.append((c, ref))
                 encontrou = True
                 break
+
+            # 2) Busca fuzzy: mesmo ano + sobrenome similar
+            if not encontrou:
+                for r in referencias:
+                    if r.ano == c.ano and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes):
+                        for s in r.sobrenomes:
+                            chaves_citadas.add(f"{s.upper()}_{r.ano}")
+                        pareamentos.append((c, r))
+                        encontrou = True
+                        break
+
         if not encontrou:
             citadas_sem_ref.append(c)
 
     refs_sem_citacao = [r for r in referencias
-                        if not any(f"{s}_{r.ano}" in chaves_citadas for s in r.sobrenomes)]
+                        if not any(f"{s.upper()}_{r.ano}" in chaves_citadas
+                                   for s in r.sobrenomes)]
 
     return {"pareamentos": pareamentos,
             "citadas_sem_ref": citadas_sem_ref,
@@ -505,28 +559,44 @@ def _pdf_para_blocos(caminho: Path, contexto: str = "") -> list:
         return []
 
 
-_PROMPT_CLAUDE = """Você é um verificador de integridade acadêmica.
+_REGRAS_ABNT = """
+NORMAS ABNT PARA CITAÇÕES (NBR 10520:2023):
+- Citação parentética: (SILVA, 2020) — sobrenome em MAIÚSCULAS
+- Citação narrativa: Segundo Silva (2020) — só 1ª letra maiúscula
+- 2 autores parentética: (SILVA; SOUZA, 2020) — separados por PONTO E VÍRGULA
+- 4+ autores: (SILVA et al., 2020) — "et al." com ponto
+- Citação direta: requer número de página — (SILVA, 2020, p. 45)
+- Compêndio/coletânea: autoria é do AUTOR DO CAPÍTULO, não do organizador
+- Apud: (AUTOR ORIGINAL apud AUTOR LIDO, ano) — use com moderação
+"""
 
-TRECHO DA DISSERTAÇÃO com a citação {citacao}:
+_PROMPT_CLAUDE = """Você é um verificador de integridade acadêmica especializado em normas ABNT.
+
+{regras_abnt}
+
+TRECHO DA DISSERTAÇÃO com a citação [{citacao}]:
 \"\"\"{contexto}\"\"\"
 
 REFERÊNCIA BIBLIOGRÁFICA: {referencia}
 ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
 
-O conteúdo da obra está anexado acima como documento(s).
+O conteúdo completo da obra está anexado acima como documento(s).
 
-Analise:
+Analise com base no documento anexado:
 1. O argumento da dissertação é coerente com o que a obra realmente afirma?
-2. Há distorção de sentido, generalização ou uso fora de contexto?
-3. A ideia atribuída ao autor consta na obra?
+2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
+3. A ideia atribuída ao autor consta na obra? Em qual parte?
+4. Se for capítulo de compêndio, a autoria está correta (autor do capítulo, não do organizador)?
 
 Responda SOMENTE com JSON (sem markdown):
-{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "frase curta", "trecho_fonte": "trecho real da obra até 150 chars"}}
+{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
 """
 
-_PROMPT_CLAUDE_TEXTO = """Você é um verificador de integridade acadêmica.
+_PROMPT_CLAUDE_TEXTO = """Você é um verificador de integridade acadêmica especializado em normas ABNT.
 
-TRECHO DA DISSERTAÇÃO com a citação {citacao}:
+{regras_abnt}
+
+TRECHO DA DISSERTAÇÃO com a citação [{citacao}]:
 \"\"\"{contexto}\"\"\"
 
 REFERÊNCIA BIBLIOGRÁFICA: {referencia}
@@ -535,13 +605,14 @@ ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
 CONTEÚDO DA OBRA:
 \"\"\"{fonte}\"\"\"
 
-Analise:
+Analise com base no conteúdo acima:
 1. O argumento da dissertação é coerente com o que a obra realmente afirma?
-2. Há distorção de sentido, generalização ou uso fora de contexto?
-3. A ideia atribuída ao autor consta na obra?
+2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
+3. A ideia atribuída ao autor consta na obra? Em qual parte?
+4. Se for capítulo de compêndio, a autoria está correta (autor do capítulo, não do organizador)?
 
 Responda SOMENTE com JSON (sem markdown):
-{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "frase curta", "trecho_fonte": "trecho real da obra até 150 chars"}}
+{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
 """
 
 _LIMITE_TEXTO_COMPLETO = 150_000   # chars (~37 500 tokens) para fallback em texto
@@ -576,6 +647,7 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                 modo = f"texto — seleção ({len(texto_fonte)//1024} KB total)"
 
             prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
+                regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
                 contexto=cit.contexto[:1200],
                 referencia=ref.texto[:300],
@@ -587,6 +659,7 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
         else:
             # PDF nativo: documentos + prompt de análise
             prompt_txt = _PROMPT_CLAUDE.format(
+                regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
                 contexto=cit.contexto[:1200],
                 referencia=ref.texto[:300],
