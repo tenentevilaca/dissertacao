@@ -165,6 +165,21 @@ def _contexto(paragrafos: list, idx: int, janela: int = 300) -> str:
     return (antes[-janela:] + " " + paragrafos[idx] + " " + depois[:janela]).strip()
 
 
+def _split_citacoes_combinadas(para: str) -> str:
+    """
+    Desdobra citações combinadas num mesmo parêntese em citações separadas.
+    Ex: (BRASIL, 2018; FRAZÃO, 2018) → (BRASIL, 2018) (FRAZÃO, 2018)
+    Não altera (CEPIK; BORBA, 2011) pois não há ano antes do ponto-e-vírgula.
+    """
+    def split_paren(m):
+        interior = m.group(1)
+        if not re.search(r'\d{4}[a-z]?\s*;\s*[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]', interior):
+            return m.group(0)
+        partes = re.split(r'\s*;\s*(?=[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ])', interior)
+        return " ".join(f"({p.strip()})" for p in partes if p.strip())
+    return re.sub(r'\(([^)]+)\)', split_paren, para)
+
+
 def encontrar_citacoes(texto: str):
     paragrafos = texto.split("\n")
     idx_refs = next((i for i, p in enumerate(paragrafos) if _RE_INICIO_REFS.match(p.strip())), -1)
@@ -173,7 +188,8 @@ def encontrar_citacoes(texto: str):
 
     for idx, para in enumerate(paragrafos[:limite]):
         ctx = _contexto(paragrafos[:limite], idx)
-        for m in _RE_PAREN.finditer(para):
+        para_exp = _split_citacoes_combinadas(para)
+        for m in _RE_PAREN.finditer(para_exp):
             aut = _autores_paren(m.group(1) or "")
             ano = m.group(2) or "?"
             pag = m.group(3) if m.lastindex and m.lastindex >= 3 else None
@@ -201,9 +217,6 @@ def extrair_referencias(texto: str, idx_refs: int) -> list:
     paragrafos = texto.split("\n")
     referencias, buffer = [], []
 
-    # Detecta início de nova referência:
-    # - autor pessoal: SILVA, João  (vírgula ou ponto-e-vírgula após sobrenome)
-    # - autor institucional: BRASIL. Lei...  PARÁ. Decreto...  (ponto após nome todo-maiúsculo)
     _RE_NOVA = re.compile(
         r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}[a-záéíóúâêîôûãõàç\'\-]*\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]"
@@ -618,16 +631,15 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
             })
     elif api_key.strip() and not sem_verificacao and not material:
         L("")
-        L("  ⚠ ATENÇÃO: Chave API fornecida mas nenhum arquivo de apoio foi lido!")
-        L("  Para verificar a coerência dos argumentos, coloque os PDFs/DOCXs")
-        L("  das obras citadas na pasta de referências e selecione-a no programa.")
+        L("  ⚠ ATENÇÃO: Chave API fornecida mas nenhum arquivo de apoio lido!")
+        L("  Coloque os PDFs/DOCXs das obras citadas na pasta de referências.")
     elif sem_verificacao:
         L("")
         L("  [Verificação semântica desativada — apenas cruzamento realizado]")
     elif not api_key.strip():
         L("")
         L("  [Sem chave API — verificação semântica não realizada]")
-        L("  [Para verificar a coerência dos argumentos, informe a chave Anthropic]")
+        L("  [Informe a chave Anthropic para verificar coerência dos argumentos]")
 
     return {
         "citacoes":        citacoes,
