@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSAO_ESPERADA = "2025-06-02-v8.5"
+VERSAO_ESPERADA = "2025-06-02-v8.6"
 
 _NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 

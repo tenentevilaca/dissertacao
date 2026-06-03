@@ -912,6 +912,94 @@ def verificar_grupo_claude(grupo: list, arquivo: str,
     return resultados
 
 
+# ── Quantos arquivos considerar como candidatos por citação ──────────────────
+_MAX_CANDIDATOS_SUGESTAO = 5
+_JANELA_CANDIDATO        = 8_000   # chars por candidato enviados ao Claude
+
+
+def _candidatos_por_relevancia(contexto: str, material: dict,
+                                top_n: int = _MAX_CANDIDATOS_SUGESTAO) -> list:
+    """Retorna [(nome_arquivo, trecho_relevante)] para os top_n arquivos mais
+    relevantes para o contexto da citação, baseado em sobreposição de keywords."""
+    palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", contexto.lower())
+                if p not in _STOPWORDS]
+    if not palavras:
+        return []
+
+    scored = []
+    for nome, texto in material.items():
+        if not texto:
+            continue
+        trecho = _trecho_relevante(contexto, texto, janela=_JANELA_CANDIDATO)
+        sc = sum(1 for w in palavras if w in trecho.lower())
+        if sc > 0:
+            scored.append((sc, nome, trecho))
+
+    scored.sort(key=lambda x: -x[0])
+    return [(nome, trecho) for _, nome, trecho in scored[:top_n]]
+
+
+def sugerir_obras_alternativas(cit: Citacao, material: dict,
+                                api_key: str, log_fn=None) -> dict:
+    """
+    Para uma citação sem fonte encontrada, busca entre todos os arquivos
+    disponíveis aquele(s) que suportam semanticamente o mesmo argumento.
+    Retorna dict com lista de sugestões ou indicação de nenhuma encontrada.
+    """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    candidatos = _candidatos_por_relevancia(cit.contexto, material)
+    if not candidatos:
+        return {"encontrou": False, "sugestoes": [], "nota": "Nenhum candidato encontrado"}
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key, max_retries=5)
+
+        blocos_obras = ""
+        for i, (nome, trecho) in enumerate(candidatos, 1):
+            blocos_obras += f"\n\n=== OBRA {i}: {nome} ===\n{trecho}"
+
+        prompt = (
+            "Você é um especialista em integridade acadêmica. "
+            "Uma dissertação contém a seguinte citação cujo autor/obra NÃO consta nas referências:\n\n"
+            f"CITAÇÃO: {cit.texto}\n"
+            f"CONTEXTO NA DISSERTAÇÃO: {cit.contexto[:400]}\n\n"
+            "Abaixo estão trechos de obras disponíveis na pasta de referências. "
+            "Verifique se alguma dessas obras contém um argumento ou dado que "
+            "poderia validar o que foi afirmado na citação:\n"
+            f"{blocos_obras}\n\n"
+            "Responda SOMENTE com JSON (sem markdown):\n"
+            '{"encontrou": true|false, '
+            '"sugestoes": [{"obra": "nome_do_arquivo", '
+            '"trecho": "trecho literal ≤200 chars que suporta o argumento", '
+            '"citacao_sugerida": "como citar em ABNT ex: SOBRENOME (ANO) ou (SOBRENOME, ANO)", '
+            '"justificativa": "1 frase explicando por que essa obra valida o argumento"}]}'
+        )
+
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            parsed = json.loads(m.group()) if m else {}
+
+        parsed.setdefault("encontrou", False)
+        parsed.setdefault("sugestoes", [])
+        return parsed
+
+    except Exception as exc:
+        _log(f"         ⚠ Erro na sugestão: {str(exc)[:120]}")
+        return {"encontrou": False, "sugestoes": [], "nota": str(exc)[:200]}
+
+
 def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                      arq_path: Optional[Path], texto_fonte: str,
                      api_key: str) -> dict:
@@ -1009,11 +1097,13 @@ def gerar_html(resultado: dict) -> str:
     refs_sc     = resultado["refs_sem_citacao"]
     pareamentos = resultado["pareamentos"]
     verifics    = resultado["verificacoes"]
+    sugestoes   = resultado.get("sugestoes_alternativas", [])
 
     corretas   = [v for v in verifics if v.get("veredicto") == "CORRETO"]
     incorretas = [v for v in verifics if v.get("veredicto") == "INCORRETO"]
     parciais   = [v for v in verifics if v.get("veredicto") == "PARCIAL"]
     sem_fonte  = [v for v in verifics if v.get("veredicto") == "SEM_FONTE"]
+    sugs_com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
 
     def e(s):
         return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1054,6 +1144,9 @@ li {{border-left:5px solid #ccc;padding:.7em 1em;margin:.5em 0;background:#fafaf
 blockquote {{margin:.5em 0;padding:.5em 1em;background:#eef3ff;border-left:4px solid #6c8ebf;font-style:italic;color:#333;border-radius:0 4px 4px 0}}
 details summary {{cursor:pointer;color:#666;font-size:.85em;margin-top:.3em}}
 small {{color:#555;font-size:.85em}}
+.sug-obra {{background:#fff9e6;border:1px solid #f0c040;border-radius:6px;padding:.6em 1em;margin:.4em 0}}
+.sug-obra b {{color:#7d5a00}}
+.sug-citacao {{font-family:monospace;background:#f5f5f5;padding:.2em .5em;border-radius:3px;color:#1a2744}}
 </style></head><body>
 <h1>📚 Verificador de Citações Acadêmicas</h1>
 <p>Gerado em <b>{e(ts)}</b> &nbsp;|&nbsp; Arquivo: <em>{e(diss_path)}</em></p>
@@ -1067,6 +1160,7 @@ small {{color:#555;font-size:.85em}}
   <div class="card" style="border-color:#27ae60"><b>{len(corretas)}</b>Verificadas<br>OK</div>
   <div class="card" style="border-color:#f39c12"><b>{len(parciais)}</b>Parciais</div>
   <div class="card" style="border-color:#e74c3c"><b>{len(incorretas)}</b>Incorretas</div>
+  <div class="card" style="border-color:#f0c040"><b>{len(sugs_com_match)}</b>Obras<br>sugeridas</div>
 </div>
 """
 
@@ -1086,6 +1180,36 @@ small {{color:#555;font-size:.85em}}
         html += secao("✓ CORRETAS — confirmadas pela obra", corretas, "#27ae60", card)
     if sem_fonte:
         html += secao("? SEM FONTE — arquivo não encontrado na pasta", sem_fonte, "#7f8c8d", card)
+
+    if sugestoes:
+        com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
+        sem_match = [s for s in sugestoes if not (s.get("encontrou") and s.get("sugestoes"))]
+        if com_match:
+            html += f'<h2 style="color:#b8860b">💡 OBRAS SUGERIDAS — citações sem referência mas com suporte nas obras disponíveis ({len(com_match)})</h2>'
+            html += '<p><em>Para cada citação cujo autor não consta nas referências, foi encontrada uma obra disponível que suporta o mesmo argumento. Considere substituir a citação pelo trabalho indicado.</em></p><ul>'
+            for s in com_match:
+                html += f'<li style="border-left:5px solid #f0c040;background:#fffdf0;padding:.7em 1em;margin:.5em 0;border-radius:0 6px 6px 0">'
+                html += f'<b>Citação original:</b> {e(s["citacao"])}<br>'
+                html += f'<small style="color:#555">{e(s["contexto"][:300])}</small><br><br>'
+                for sg in s["sugestoes"]:
+                    html += (
+                        f'<div class="sug-obra">'
+                        f'<b>Obra encontrada:</b> {e(sg.get("obra", "?"))}<br>'
+                        f'<b>Citação sugerida:</b> <span class="sug-citacao">{e(sg.get("citacao_sugerida", "?"))}</span><br>'
+                        f'<b>Justificativa:</b> {e(sg.get("justificativa", ""))}<br>'
+                    )
+                    if sg.get("trecho"):
+                        html += f'<blockquote>"{e(sg["trecho"])}"</blockquote>'
+                    html += '</div>'
+                html += '</li>'
+            html += '</ul>'
+        if sem_match:
+            html += f'<h2 style="color:#95a5a6">— SEM SUGESTÃO — citações cujo argumento não foi encontrado nas obras disponíveis ({len(sem_match)})</h2><ul>'
+            for s in sem_match:
+                html += (f'<li class="info"><b>{e(s["citacao"])}</b>'
+                         f'<details><summary><small>ver contexto</small></summary>'
+                         f'<small>{e(s["contexto"][:300])}</small></details></li>')
+            html += '</ul>'
 
     if not verifics and pareamentos:
         html += f'<h2 style="color:#3498db">✓ Citações pareadas com referências ({len(pareamentos)})</h2>'
@@ -1111,7 +1235,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.5")
+    L("VERSÃO: 2025-06-02-v8.6")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1324,14 +1448,69 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                 if gi < total_grupos:
                     time.sleep(3)
 
+    # ────────────────────────────────────────────────────────────────────
+    # ETAPA 5 — Sugestão de obras alternativas para citações sem fonte
+    # ────────────────────────────────────────────────────────────────────
+    sugestoes_alternativas = []
+    L("")
+    L("=" * 65)
+    L("ETAPA 5 — Sugerindo obras alternativas para citações sem fonte")
+    L("=" * 65)
+
+    sem_fonte_verifs = [v for v in verificacoes
+                        if v.get("veredicto") == "SEM_FONTE" and not v.get("arquivo_fonte")]
+    material_com_texto = {n: t for n, t in material.items() if t}
+
+    if sem_verificacao or not api_key.strip():
+        L("  [Etapa ignorada — verificação semântica desativada ou sem chave API]")
+    elif not material_com_texto:
+        L("  [Sem arquivos com texto extraído — não é possível busca semântica]")
+    elif not sem_fonte_verifs:
+        L("  ✓ Nenhuma citação sem fonte requer sugestão")
+    else:
+        L(f"  → {len(sem_fonte_verifs)} citação(ões) sem fonte a analisar")
+        L(f"  → {len(material_com_texto)} obra(s) disponíveis para busca semântica")
+        L("")
+        for i, v in enumerate(sem_fonte_verifs, 1):
+            if stop_fn and stop_fn():
+                L("\n[INTERROMPIDO]")
+                break
+            cit_txt = v["citacao"]
+            cit_ctx = v["contexto"]
+            L(f"  [{i:>3}/{len(sem_fonte_verifs)}] {cit_txt[:70]}")
+            cit_obj = Citacao(
+                texto=cit_txt,
+                autores=v.get("autores", []),
+                ano=v.get("ano", ""),
+                pagina=None,
+                contexto=cit_ctx,
+                paragrafo_idx=0,
+            )
+            resultado_sug = sugerir_obras_alternativas(cit_obj, material_com_texto, api_key, L)
+            if resultado_sug.get("encontrou") and resultado_sug.get("sugestoes"):
+                for s in resultado_sug["sugestoes"]:
+                    L(f"         ✔ Obra sugerida: {s.get('obra','?')} → {s.get('citacao_sugerida','?')}")
+            else:
+                L(f"         — Nenhuma obra de suporte encontrada")
+            sugestoes_alternativas.append({
+                "citacao":  cit_txt,
+                "contexto": cit_ctx,
+                "autores":  v.get("autores", []),
+                "ano":      v.get("ano", ""),
+                **resultado_sug,
+            })
+            if i < len(sem_fonte_verifs):
+                time.sleep(3)
+
     return {
-        "citacoes":        citacoes,
-        "referencias":     referencias,
-        "pareamentos":     pareamentos,
-        "citadas_sem_ref": citadas_sem_ref,
-        "refs_sem_citacao":refs_sem_citacao,
-        "verificacoes":    verificacoes,
-        "diss_path":       diss_path,
+        "citacoes":               citacoes,
+        "referencias":            referencias,
+        "pareamentos":            pareamentos,
+        "citadas_sem_ref":        citadas_sem_ref,
+        "refs_sem_citacao":       refs_sem_citacao,
+        "verificacoes":           verificacoes,
+        "sugestoes_alternativas": sugestoes_alternativas,
+        "diss_path":              diss_path,
     }
 
 
