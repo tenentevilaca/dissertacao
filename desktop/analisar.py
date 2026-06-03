@@ -786,7 +786,130 @@ Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
 """
 
-_LIMITE_TEXTO_SEMANTICA = 30_000    # ~7 500 tokens — suficiente para verificação
+_LIMITE_TEXTO_SEMANTICA  = 30_000   # janela para 1 citação
+_LIMITE_TEXTO_GRUPO      = 50_000   # janela maior quando múltiplas citações da mesma obra
+_MAX_CITS_POR_CHAMADA    = 10       # máximo de citações por chamada à API
+
+
+def verificar_grupo_claude(grupo: list, arquivo: str,
+                            arq_path: Optional[Path], texto_fonte: str,
+                            api_key: str, log_fn=None) -> list:
+    """
+    Verifica todas as citações de uma mesma obra em uma única chamada.
+    `grupo` é uma lista de (Citacao, Referencia|None, arq, arq_path, txt).
+    Retorna lista de dicts com veredicto na mesma ordem do grupo.
+    """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key, max_retries=5)
+
+    todos_contextos = " ".join(item[0].contexto for item in grupo)
+
+    # Monta lista de citações para o prompt
+    def _montar_lista(sub):
+        linhas = []
+        for i, (cit, ref, _, _, _) in enumerate(sub, 1):
+            ref_txt = ref.texto[:300] if ref else f"{cit.autores[0]} ({cit.ano})"
+            comp = ""
+            if ref and re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE):
+                comp = f" [COMPÊNDIO — capítulo de {ref.sobrenome}]"
+            linhas.append(
+                f"[{i}] CITAÇÃO: {cit.texto}\n"
+                f"    CONTEXTO: {cit.contexto[:350]}\n"
+                f"    REFERÊNCIA: {ref_txt}{comp}"
+            )
+        return "\n\n".join(linhas)
+
+    instrucao_final = (
+        "Para cada citação verifique: o argumento da dissertação é coerente com a obra?\n"
+        "Responda SOMENTE com array JSON (sem markdown), um objeto por citação, na mesma ordem:\n"
+        '[{"idx":1,"veredicto":"CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE",'
+        '"justificativa":"1 frase","trecho_fonte":"trecho literal ≤150 chars"},...]'
+    )
+
+    def _chamar_api(sub, content):
+        max_tok = min(4096, 400 * len(sub) + 512)
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=max_tok,
+            messages=[{"role": "user", "content": content}],
+        )
+        raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            objs = re.findall(r'\{[^{}]+\}', raw, re.DOTALL)
+            parsed = []
+            for s in objs:
+                try:
+                    parsed.append(json.loads(s))
+                except Exception:
+                    pass
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        parsed = sorted(parsed, key=lambda x: x.get("idx", 999)) if isinstance(parsed, list) else []
+        while len(parsed) < len(sub):
+            parsed.append({"veredicto": "ERRO", "justificativa": "Resposta incompleta da IA", "trecho_fonte": ""})
+        return parsed[:len(sub)]
+
+    def _erro_lista(sub, msg):
+        return [{"veredicto": "ERRO", "justificativa": msg[:150], "trecho_fonte": ""} for _ in sub]
+
+    resultados = []
+    # Divide em lotes de MAX_CITS_POR_CHAMADA
+    for inicio in range(0, len(grupo), _MAX_CITS_POR_CHAMADA):
+        sub = grupo[inicio:inicio + _MAX_CITS_POR_CHAMADA]
+        sub_contextos = " ".join(item[0].contexto for item in sub)
+        lista_str = _montar_lista(sub)
+
+        try:
+            if texto_fonte:
+                fonte_txt = _trecho_relevante(sub_contextos + " " + todos_contextos,
+                                              texto_fonte, janela=_LIMITE_TEXTO_GRUPO)
+                modo = f"texto {len(fonte_txt)//1024}KB/{len(texto_fonte)//1024}KB"
+                _log(f"     → texto {len(fonte_txt):,} chars de {len(texto_fonte):,} — lote {inicio//10+1}/{-(-len(grupo)//_MAX_CITS_POR_CHAMADA)}")
+                prompt = (
+                    f"Você é um verificador de integridade acadêmica especializado em normas ABNT.\n\n"
+                    f"{_REGRAS_ABNT}\n\n"
+                    f"OBRA: {arquivo} (leitura: {modo})\n\n"
+                    f"CONTEÚDO DA OBRA:\n\"\"\"{fonte_txt}\"\"\"\n\n"
+                    f"Verifique as {len(sub)} citações desta obra encontradas na dissertação:\n\n"
+                    f"{lista_str}\n\n{instrucao_final}"
+                )
+                content = [{"type": "text", "text": prompt}]
+
+            elif arq_path and arq_path.suffix.lower() == ".pdf" and arq_path.exists():
+                blocos_doc = _pdf_para_blocos(arq_path, sub_contextos)
+                if not blocos_doc:
+                    resultados += _erro_lista(sub, "PDF não pôde ser enviado à API")
+                    continue
+                modo = f"PDF nativo {len(blocos_doc)} bloco(s)"
+                _log(f"     → PDF nativo {len(blocos_doc)} bloco(s) — lote {inicio//10+1}")
+                prompt = (
+                    f"Você é um verificador de integridade acadêmica especializado em normas ABNT.\n\n"
+                    f"{_REGRAS_ABNT}\n\n"
+                    f"OBRA: {arquivo} (leitura: {modo})\n"
+                    f"O conteúdo está nos documentos anexados.\n\n"
+                    f"Verifique as {len(sub)} citações desta obra encontradas na dissertação:\n\n"
+                    f"{lista_str}\n\n{instrucao_final}"
+                )
+                content = blocos_doc + [{"type": "text", "text": prompt}]
+            else:
+                resultados += _erro_lista(sub, "Sem conteúdo disponível para verificação")
+                continue
+
+            resultados += _chamar_api(sub, content)
+
+        except Exception as exc:
+            resultados += _erro_lista(sub, str(exc))
+
+        if inicio + _MAX_CITS_POR_CHAMADA < len(grupo):
+            time.sleep(3)  # pausa entre lotes da mesma obra
+
+    return resultados
 
 
 def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
@@ -988,7 +1111,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.4")
+    L("VERSÃO: 2025-06-02-v8.5")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1133,52 +1256,72 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         else:
             L(f"  → Iniciando verificação semântica de {total_verif} citação(ões)...")
             L("")
-            for i, (cit, ref, arq, arq_path, txt) in enumerate(candidatos_semantica, 1):
+
+            # ── Registra citações SEM arquivo encontrado ─────────────────
+            sem_arq = [(cit, ref, arq, arq_path, txt)
+                       for cit, ref, arq, arq_path, txt in candidatos_semantica
+                       if not arq]
+            for cit, ref, arq, arq_path, txt in sem_arq:
+                ref_sob = ref.sobrenome if ref else cit.autores[0]
+                ref_ano = ref.ano if ref else cit.ano
+                L(f"         → arquivo não encontrado para {ref_sob} ({ref_ano})")
+                verificacoes.append({
+                    "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
+                    "contexto": cit.contexto,
+                    "referencia": ref.texto if ref else f"{cit.autores[0]} ({cit.ano})",
+                    "arquivo_fonte": "", "veredicto": "SEM_FONTE",
+                    "justificativa": f"Arquivo de {ref_sob} ({ref_ano}) não encontrado na pasta",
+                    "trecho_fonte": "",
+                })
+
+            # ── Agrupa citações por arquivo fonte ─────────────────────────
+            from collections import defaultdict as _ddict
+            grupos: dict = _ddict(list)
+            for item in candidatos_semantica:
+                cit, ref, arq, arq_path, txt = item
+                if arq:
+                    grupos[arq].append(item)
+
+            total_grupos = len(grupos)
+            L(f"  → {total_grupos} obra(s) distinta(s) a verificar")
+            L("")
+
+            for gi, (arq_nome, grupo) in enumerate(sorted(grupos.items()), 1):
                 if stop_fn and stop_fn():
                     L("\n[INTERROMPIDO]")
                     break
-                tam = f"{arq_path.stat().st_size // 1024} KB" if arq_path else "—"
-                L(f"  [{i:>3}/{total_verif}] {cit.texto[:70]}")
-                # Verifica se o arquivo foi realmente encontrado (arq pode estar vazio
-                # mas txt pode ser "" em PDFs sem extração — o que ainda é válido para API)
-                if not arq:
-                    ref_sob = ref.sobrenome if ref else cit.autores[0]
-                    ref_ano = ref.ano if ref else cit.ano
-                    L(f"         → arquivo não encontrado para {ref_sob} ({ref_ano})")
-                    verificacoes.append({
-                        "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
-                        "contexto": cit.contexto,
-                        "referencia": ref.texto if ref else f"{cit.autores[0]} ({cit.ano})",
-                        "arquivo_fonte": "", "veredicto": "SEM_FONTE",
-                        "justificativa": f"Arquivo de {ref_sob} ({ref_ano}) não encontrado na pasta",
-                        "trecho_fonte": "",
-                    })
-                    continue
-                modo_txt = f"texto {len(txt):,} chars" if txt else "somente PDF nativo"
-                L(f"         → fonte: {arq}  ({tam}, {modo_txt})")
-                # Monta ref_obj para verificar_claude (usa dados reais ou proxy da citação)
-                if ref is None:
-                    ref_obj = Referencia(
+
+                _, _, _, arq_path_g, txt_g = grupo[0]
+                tam = f"{arq_path_g.stat().st_size // 1024} KB" if arq_path_g else "—"
+                modo_txt = f"texto {len(txt_g):,} chars" if txt_g else "somente PDF nativo"
+                L(f"  [{gi:>3}/{total_grupos}] {arq_nome}  ({tam}, {modo_txt})")
+                L(f"           {len(grupo)} citação(ões) desta obra")
+
+                resultados_g = verificar_grupo_claude(
+                    grupo, arq_nome, arq_path_g, txt_g, api_key, log_fn=L
+                )
+
+                for (cit, ref, arq, arq_path, txt), v in zip(grupo, resultados_g):
+                    emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠",
+                             "SEM_FONTE": "?", "ERRO": "!"}.get(v.get("veredicto", ""), "?")
+                    L(f"           {emoji} {cit.texto[:60]}  →  {v.get('veredicto')} — {v.get('justificativa','')[:70]}")
+
+                    ref_obj = ref if ref is not None else Referencia(
                         texto=f"{cit.autores[0]} ({cit.ano}) — sem entrada na lista de referências",
                         sobrenome=cit.autores[0],
                         sobrenomes=cit.autores,
                         ano=cit.ano,
                         titulo=" ".join(cit.autores),
                     )
-                else:
-                    ref_obj = ref
-                v = verificar_claude(cit, ref_obj, arq, arq_path, txt, api_key)
-                emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠",
-                         "SEM_FONTE": "?", "ERRO": "!"}.get(v.get("veredicto", ""), "?")
-                L(f"         {emoji} {v.get('veredicto')} — {v.get('justificativa','')[:80]}")
-                verificacoes.append({
-                    "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
-                    "contexto": cit.contexto,
-                    "referencia": ref_obj.texto,
-                    "arquivo_fonte": arq, **v,
-                })
-                # Pausa entre chamadas para evitar rate limit (3s mínimo)
-                if i < total_verif:
+                    verificacoes.append({
+                        "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
+                        "contexto": cit.contexto,
+                        "referencia": ref_obj.texto,
+                        "arquivo_fonte": arq, **v,
+                    })
+
+                # Pausa entre obras diferentes
+                if gi < total_grupos:
                     time.sleep(3)
 
     return {
