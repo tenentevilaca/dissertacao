@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import threading
+import time
 import webbrowser
 import zipfile
 from dataclasses import dataclass
@@ -529,15 +530,37 @@ def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict) -> tupl
     candidatos = []
     for nome, texto in material.items():
         score = 0
-        tl = texto.lower() if texto else ""   # texto pode ser "" (PDF sem extração)
-        if sob_l in nome.lower():  score += 10
-        if ano in nome:            score += 5
-        if tl and sob_l in tl:    score += 3   # só pontua se há texto
-        if tl and ano in tl:      score += 2
-        for p in tit_palavras:
-            if tl and p in tl:    score += 1
+        nome_l = nome.lower()
+        tl = texto.lower() if texto else ""
+
+        # Matching por nome de arquivo (alta confiança)
+        nome_no_arquivo = sob_l in nome_l
+        ano_no_arquivo  = ano in nome
+        if nome_no_arquivo:  score += 20  # aumentado: preferência forte por match no filename
+        if ano_no_arquivo:   score += 10
+
+        # Matching por conteúdo (só é usado se há texto E o nome já apareceu no arquivo)
+        # Evita falsos positivos: só pontua por texto se o sobrenome TAMBÉM está no filename,
+        # ou se há múltiplas palavras do título presentes
+        if tl:
+            nome_no_texto = sob_l in tl
+            ano_no_texto  = ano in tl
+            hits_titulo   = sum(1 for p in tit_palavras if p in tl)
+
+            if nome_no_arquivo:
+                # Já temos match no filename: pontuação adicional por conteúdo
+                if nome_no_texto: score += 3
+                if ano_no_texto:  score += 2
+                score += hits_titulo
+            elif hits_titulo >= 3:
+                # Sem match no filename, mas título muito específico no texto
+                if nome_no_texto: score += 5
+                if ano_no_texto:  score += 3
+                score += hits_titulo
+
         if score > 0:
             candidatos.append((score, nome, texto))
+
     if not candidatos:
         return "", ""
     candidatos.sort(key=lambda x: -x[0])
@@ -753,11 +776,24 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
             )
             content = blocos_doc + [{"type": "text", "text": prompt_txt}]
 
-        resp = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
-        )
+        # Retry com backoff exponencial para rate limit (429)
+        esperas = [30, 60, 120]
+        for tentativa, espera in enumerate(esperas + [None], 1):
+            try:
+                resp = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": content}],
+                )
+                break  # sucesso
+            except Exception as exc:
+                msg = str(exc)
+                eh_rate_limit = "429" in msg or "rate_limit" in msg.lower() or "overloaded" in msg.lower()
+                if eh_rate_limit and espera is not None:
+                    time.sleep(espera)
+                    continue
+                raise  # outros erros: re-levanta imediatamente
+
         raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
         try:
             return json.loads(raw)
@@ -770,7 +806,10 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                     pass
         return {"veredicto": "ERRO", "justificativa": raw[:200], "trecho_fonte": ""}
     except Exception as e:
-        return {"veredicto": "ERRO", "justificativa": str(e)[:200], "trecho_fonte": ""}
+        msg = str(e)[:200]
+        if "429" in msg or "rate_limit" in msg.lower():
+            msg = f"Rate limit da API atingido após 3 tentativas. Aguarde alguns minutos e tente novamente. ({msg})"
+        return {"veredicto": "ERRO", "justificativa": msg, "trecho_fonte": ""}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -886,7 +925,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.1")
+    L("VERSÃO: 2025-06-02-v8.2")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1074,6 +1113,9 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                     "referencia": ref_obj.texto,
                     "arquivo_fonte": arq, **v,
                 })
+                # Pausa entre chamadas para evitar rate limit (3s mínimo)
+                if i < total_verif:
+                    time.sleep(3)
 
     return {
         "citacoes":        citacoes,
@@ -1279,7 +1321,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.1]")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.2]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
