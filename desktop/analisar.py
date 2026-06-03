@@ -612,8 +612,11 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
                         score += hits_cap * 2
                         score += hits_livro * 2
                 else:
-                    # Obra simples: precisa de título específico no texto
-                    if hits_cap >= 4:
+                    # Obra simples: autor+ano no texto (forte evidência combinada)
+                    if sob_no_texto and ano_no_texto:
+                        score += 12 + hits_cap * 2
+                    elif hits_cap >= 4:
+                        # Muitas palavras do título no texto (sem nome no arquivo)
                         if sob_no_texto: score += 8
                         if ano_no_texto: score += 3
                         score += hits_cap * 2
@@ -783,7 +786,7 @@ Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
 """
 
-_LIMITE_TEXTO_COMPLETO = 150_000   # chars (~37 500 tokens) para fallback em texto
+_LIMITE_TEXTO_SEMANTICA = 30_000    # ~7 500 tokens — suficiente para verificação
 
 
 def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
@@ -791,44 +794,26 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                      api_key: str) -> dict:
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        # max_retries=5 ativa retry automático do SDK para 429 e 529
+        client = anthropic.Anthropic(api_key=api_key, max_retries=5)
 
         ext = arq_path.suffix.lower() if arq_path else ""
-        blocos_doc: list = []
-        modo = ""
 
-        # ── Tenta enviar o arquivo nativo (PDF direto) ──────────────────
-        if ext == ".pdf" and arq_path and arq_path.exists():
-            blocos_doc = _pdf_para_blocos(arq_path, cit.contexto)
-            if blocos_doc:
-                n_pag_info = f"{len(blocos_doc)} bloco(s)"
-                modo = f"PDF nativo — {n_pag_info}"
+        # Detecção de compêndio (padrão ABNT "In:") para instruir Claude
+        eh_comp = bool(re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE))
+        info_comp = (
+            f"ATENÇÃO — COMPÊNDIO: Este é um capítulo de livro. "
+            f"Localize o capítulo de {ref.sobrenome} dentro do livro "
+            f"e baseie a análise nesse capítulo específico."
+            if eh_comp else ""
+        )
 
-        # ── Fallback: texto extraído ─────────────────────────────────────
-        if not blocos_doc:
-            if not texto_fonte:
-                return {"veredicto": "SEM_FONTE",
-                        "justificativa": (
-                            "PDF disponível mas não foi possível enviá-lo à API. "
-                            "Instale PyMuPDF ('pip install PyMuPDF') para resolver."
-                        ),
-                        "trecho_fonte": ""}
-            if len(texto_fonte) <= _LIMITE_TEXTO_COMPLETO:
-                fonte_txt = texto_fonte
-                modo = "texto completo"
-            else:
-                fonte_txt = _trecho_relevante(cit.contexto, texto_fonte,
-                                              janela=_LIMITE_TEXTO_COMPLETO)
-                modo = f"texto — seleção ({len(texto_fonte)//1024} KB total)"
-
-            # Detecta compêndio para instruir Claude
-            eh_comp = bool(re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE))
-            info_comp = (
-                f"ATENÇÃO — COMPÊNDIO: Este é um capítulo de livro organizado. "
-                f"Localize no arquivo o capítulo escrito por {ref.sobrenome} "
-                f"e verifique o argumento nesse capítulo específico, não no texto do organizador."
-                if eh_comp else ""
-            )
+        # ── PRIORIDADE 1: texto extraído (token-eficiente, evita rate limit) ──
+        # Com PyMuPDF instalado, sempre preferimos texto. PDF nativo só como fallback.
+        if texto_fonte:
+            fonte_txt = _trecho_relevante(cit.contexto, texto_fonte,
+                                          janela=_LIMITE_TEXTO_SEMANTICA)
+            modo = f"texto ({len(texto_fonte)//1024} KB total → seleção {len(fonte_txt)//1024} KB)"
             prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
@@ -840,15 +825,15 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                 fonte=fonte_txt,
             )
             content = [{"type": "text", "text": prompt_txt}]
-        else:
-            # PDF nativo: documentos + prompt de análise
-            eh_comp = bool(re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE))
-            info_comp = (
-                f"ATENÇÃO — COMPÊNDIO: Este é um capítulo de livro organizado. "
-                f"Localize no arquivo o capítulo escrito por {ref.sobrenome} "
-                f"e verifique o argumento nesse capítulo específico, não no texto do organizador."
-                if eh_comp else ""
-            )
+
+        # ── PRIORIDADE 2: PDF nativo (fallback quando sem texto extraído) ──
+        elif ext == ".pdf" and arq_path and arq_path.exists():
+            blocos_doc = _pdf_para_blocos(arq_path, cit.contexto)
+            if not blocos_doc:
+                return {"veredicto": "SEM_FONTE",
+                        "justificativa": "PDF não pôde ser enviado à API (muito grande ou corrompido).",
+                        "trecho_fonte": ""}
+            modo = f"PDF nativo — {len(blocos_doc)} bloco(s)"
             prompt_txt = _PROMPT_CLAUDE.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
@@ -860,23 +845,17 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
             )
             content = blocos_doc + [{"type": "text", "text": prompt_txt}]
 
-        # Retry com backoff exponencial para rate limit (429)
-        esperas = [30, 60, 120]
-        for tentativa, espera in enumerate(esperas + [None], 1):
-            try:
-                resp = client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": content}],
-                )
-                break  # sucesso
-            except Exception as exc:
-                msg = str(exc)
-                eh_rate_limit = "429" in msg or "rate_limit" in msg.lower() or "overloaded" in msg.lower()
-                if eh_rate_limit and espera is not None:
-                    time.sleep(espera)
-                    continue
-                raise  # outros erros: re-levanta imediatamente
+        else:
+            return {"veredicto": "SEM_FONTE",
+                    "justificativa": "Nenhum conteúdo disponível para verificação.",
+                    "trecho_fonte": ""}
+
+        # SDK já faz retry automático (max_retries=5) para 429/529
+        resp = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            messages=[{"role": "user", "content": content}],
+        )
 
         raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
         try:
@@ -1009,7 +988,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.3")
+    L("VERSÃO: 2025-06-02-v8.4")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1406,7 +1385,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.3]")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.4]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
