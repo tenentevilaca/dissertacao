@@ -524,19 +524,18 @@ def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 20000) -> s
 
 def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict) -> tuple:
     sob_l = sobrenome.lower()
-    # Usa até 10 palavras do título para pontuar (sem limite de posição no texto)
     tit_palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", titulo.lower())
                     if p not in _STOPWORDS][:10]
     candidatos = []
     for nome, texto in material.items():
         score = 0
-        tl = texto.lower()
+        tl = texto.lower() if texto else ""   # texto pode ser "" (PDF sem extração)
         if sob_l in nome.lower():  score += 10
         if ano in nome:            score += 5
-        if sob_l in tl:            score += 3
-        if ano in texto:           score += 2
+        if tl and sob_l in tl:    score += 3   # só pontua se há texto
+        if tl and ano in tl:      score += 2
         for p in tit_palavras:
-            if p in tl:            score += 1   # busca em TODO o texto, não só os primeiros 2000 chars
+            if tl and p in tl:    score += 1
         if score > 0:
             candidatos.append((score, nome, texto))
     if not candidatos:
@@ -717,6 +716,13 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
 
         # ── Fallback: texto extraído ─────────────────────────────────────
         if not blocos_doc:
+            if not texto_fonte:
+                return {"veredicto": "SEM_FONTE",
+                        "justificativa": (
+                            "PDF disponível mas não foi possível enviá-lo à API. "
+                            "Instale PyMuPDF ('pip install PyMuPDF') para resolver."
+                        ),
+                        "trecho_fonte": ""}
             if len(texto_fonte) <= _LIMITE_TEXTO_COMPLETO:
                 fonte_txt = texto_fonte
                 modo = "texto completo"
@@ -880,7 +886,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8")
+    L("VERSÃO: 2025-06-02-v8.1")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -923,23 +929,37 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
     L(f"  {len(arquivos)} arquivo(s) encontrado(s) na pasta")
     L("")
 
-    material       = {}   # nome → texto extraído  (para matching)
+    material       = {}   # nome → texto extraído  (para matching por conteúdo)
     material_paths = {}   # nome → Path            (para envio nativo ao Claude)
+    pdf_sem_texto  = 0
     for i, arq in enumerate(arquivos, 1):
         if stop_fn and stop_fn():
             L("\n[INTERROMPIDO]")
             return None
         t = ler_arquivo(arq)
-        ok = t and len(t) > 50 and not t.startswith("[")
-        if ok:
+        is_pdf = arq.suffix.lower() == ".pdf"
+        ok_texto = bool(t) and len(t) > 50 and not t.startswith("[")
+
+        if ok_texto:
             material[arq.name]       = t
             material_paths[arq.name] = arq
-            tipo = "PDF" if arq.suffix.lower() == ".pdf" else arq.suffix.upper().lstrip(".")
+            tipo = "PDF" if is_pdf else arq.suffix.upper().lstrip(".")
             L(f"  [{i:>3}/{len(arquivos)}] ✓ {arq.name}  ({len(t):,} chars, {tipo})")
+        elif is_pdf and arq.exists() and arq.stat().st_size > 0:
+            # PDF sem extração de texto (PyMuPDF ausente), mas válido para envio nativo à API
+            material[arq.name]       = ""
+            material_paths[arq.name] = arq
+            pdf_sem_texto += 1
+            L(f"  [{i:>3}/{len(arquivos)}] ~ {arq.name}  (PDF disponível — envio nativo à API)")
         else:
             L(f"  [{i:>3}/{len(arquivos)}] ✗ {arq.name}  — falha na leitura")
 
-    L(f"\n  ✓ {len(material)} arquivo(s) lido(s) com sucesso")
+    com_texto = len(material) - pdf_sem_texto
+    L(f"\n  ✓ {len(material)} arquivo(s) disponível(is): {com_texto} com texto, {pdf_sem_texto} somente PDF nativo")
+    if pdf_sem_texto > 0:
+        L("  ℹ Para extrair texto de PDFs (melhora o matching), instale:")
+        L("    pip install PyMuPDF")
+        L("  Os PDFs serão enviados nativamente ao Claude mesmo sem texto extraído.")
 
     L("")
     L("=" * 65)
@@ -994,7 +1014,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         for cit in citadas_sem_ref:
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano,
                                      " ".join(cit.autores), material)
-            if txt:
+            if arq:   # arq="" significa nenhum arquivo encontrado pelo nome
                 arq_path = material_paths.get(arq) if arq else None
                 sem_ref_com_fonte.append((cit, None, arq, arq_path, txt))
 
@@ -1016,7 +1036,9 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                     break
                 tam = f"{arq_path.stat().st_size // 1024} KB" if arq_path else "—"
                 L(f"  [{i:>3}/{total_verif}] {cit.texto[:70]}")
-                if not txt:
+                # Verifica se o arquivo foi realmente encontrado (arq pode estar vazio
+                # mas txt pode ser "" em PDFs sem extração — o que ainda é válido para API)
+                if not arq:
                     ref_sob = ref.sobrenome if ref else cit.autores[0]
                     ref_ano = ref.ano if ref else cit.ano
                     L(f"         → arquivo não encontrado para {ref_sob} ({ref_ano})")
@@ -1029,7 +1051,8 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                         "trecho_fonte": "",
                     })
                     continue
-                L(f"         → fonte: {arq}  ({tam})")
+                modo_txt = f"texto {len(txt):,} chars" if txt else "somente PDF nativo"
+                L(f"         → fonte: {arq}  ({tam}, {modo_txt})")
                 # Monta ref_obj para verificar_claude (usa dados reais ou proxy da citação)
                 if ref is None:
                     ref_obj = Referencia(
@@ -1256,7 +1279,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8]")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.1]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
