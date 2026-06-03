@@ -523,48 +523,114 @@ def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 20000) -> s
     return trecho[:janela]
 
 
-def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict) -> tuple:
+def _extrair_palavras_titulo(ref_texto: str) -> tuple:
+    """
+    Extrai palavras-chave do título a partir do texto completo da referência.
+    Retorna (palavras_do_artigo/capitulo, palavras_do_livro).
+    Detecta compêndios pelo padrão ABNT: "... In: EDITOR (org.)..."
+    """
+    palavras_artigo = []
+    palavras_livro  = []
+
+    # Detecta compêndio (capítulo de livro): "Título do capítulo. In: EDITOR..."
+    m_in = re.search(r"\bIn:\s*", ref_texto, re.IGNORECASE)
+    if m_in:
+        texto_cap  = ref_texto[:m_in.start()]
+        texto_livro = ref_texto[m_in.end():]
+        palavras_artigo = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                  texto_cap) if p.lower() not in _STOPWORDS][:12]
+        palavras_livro  = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                  texto_livro) if p.lower() not in _STOPWORDS][:12]
+    else:
+        # Referência simples: pega tudo após o primeiro "."
+        m_titulo = re.search(r"\.\s+(.+)", ref_texto)
+        src = m_titulo.group(1) if m_titulo else ref_texto
+        palavras_artigo = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                   src) if p.lower() not in _STOPWORDS][:15]
+
+    return (
+        [p.lower() for p in palavras_artigo],
+        [p.lower() for p in palavras_livro],
+    )
+
+
+def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
+                  material: dict, log_fn=None) -> tuple:
+    """
+    Encontra o arquivo de apoio para uma referência bibliográfica.
+
+    Lógica de scoring (maior = melhor):
+    ─ Sobrenome no nome do arquivo      → +20
+    ─ Ano no nome do arquivo            → +10
+    ─ Palavras do título no conteúdo    → +2 por palavra (cap) / +1 por palavra (livro)
+    ─ Sobrenome no conteúdo             → +5 (se já no filename) / +3 (só conteúdo)
+    ─ Ano no conteúdo                   → +3 (se já no filename) / +1 (só conteúdo)
+
+    Para compêndios (detectados por "In:"), busca separadamente pelo
+    título do capítulo E pelo título do livro, e aceita o arquivo que
+    contenha o autor do capítulo OU o título do livro.
+    """
     sob_l = sobrenome.lower()
-    tit_palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", titulo.lower())
-                    if p not in _STOPWORDS][:10]
+    palavras_cap, palavras_livro = _extrair_palavras_titulo(ref_texto)
+    eh_compendio = bool(palavras_livro)
+
     candidatos = []
     for nome, texto in material.items():
         score = 0
         nome_l = nome.lower()
         tl = texto.lower() if texto else ""
 
-        # Matching por nome de arquivo (alta confiança)
+        # ── Matching por nome de arquivo ──────────────────────────────
         nome_no_arquivo = sob_l in nome_l
         ano_no_arquivo  = ano in nome
-        if nome_no_arquivo:  score += 20  # aumentado: preferência forte por match no filename
-        if ano_no_arquivo:   score += 10
+        if nome_no_arquivo: score += 20
+        if ano_no_arquivo:  score += 10
 
-        # Matching por conteúdo (só é usado se há texto E o nome já apareceu no arquivo)
-        # Evita falsos positivos: só pontua por texto se o sobrenome TAMBÉM está no filename,
-        # ou se há múltiplas palavras do título presentes
+        # ── Matching por conteúdo ─────────────────────────────────────
         if tl:
-            nome_no_texto = sob_l in tl
-            ano_no_texto  = ano in tl
-            hits_titulo   = sum(1 for p in tit_palavras if p in tl)
+            sob_no_texto = sob_l in tl
+            ano_no_texto = ano in tl
+
+            # Palavras do título do artigo/capítulo
+            hits_cap = sum(1 for p in palavras_cap if p in tl)
+            # Palavras do título do livro (compêndio)
+            hits_livro = sum(1 for p in palavras_livro if p in tl)
 
             if nome_no_arquivo:
-                # Já temos match no filename: pontuação adicional por conteúdo
-                if nome_no_texto: score += 3
-                if ano_no_texto:  score += 2
-                score += hits_titulo
-            elif hits_titulo >= 3:
-                # Sem match no filename, mas título muito específico no texto
-                if nome_no_texto: score += 5
-                if ano_no_texto:  score += 3
-                score += hits_titulo
+                # Filename já bate: conteúdo é bônus de confirmação
+                if sob_no_texto: score += 5
+                if ano_no_texto: score += 3
+                score += hits_cap * 2
+                score += hits_livro
+            else:
+                # Sem match no filename: exige evidência mais forte no conteúdo
+                if eh_compendio:
+                    # Compêndio: aceita se o livro OU o autor do capítulo está no texto
+                    if hits_livro >= 3 or (sob_no_texto and hits_cap >= 2):
+                        if sob_no_texto: score += 8
+                        if ano_no_texto: score += 3
+                        score += hits_cap * 2
+                        score += hits_livro * 2
+                else:
+                    # Obra simples: precisa de título específico no texto
+                    if hits_cap >= 4:
+                        if sob_no_texto: score += 8
+                        if ano_no_texto: score += 3
+                        score += hits_cap * 2
 
         if score > 0:
             candidatos.append((score, nome, texto))
 
     if not candidatos:
+        if log_fn:
+            log_fn(f"         → nenhum arquivo encontrado para {sobrenome} ({ano})")
         return "", ""
+
     candidatos.sort(key=lambda x: -x[0])
-    _, nome_m, texto_m = candidatos[0]
+    melhor_score, nome_m, texto_m = candidatos[0]
+    if log_fn:
+        tipo = "compêndio" if eh_compendio else "obra"
+        log_fn(f"         → {tipo} localizada: {nome_m[:65]} [score={melhor_score}]")
     return nome_m, texto_m
 
 
@@ -678,16 +744,16 @@ _PROMPT_CLAUDE = """Você é um verificador de integridade acadêmica especializ
 TRECHO DA DISSERTAÇÃO com a citação [{citacao}]:
 \"\"\"{contexto}\"\"\"
 
-REFERÊNCIA BIBLIOGRÁFICA: {referencia}
+REFERÊNCIA BIBLIOGRÁFICA COMPLETA: {referencia}
 ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
-
+{info_compendio}
 O conteúdo completo da obra está anexado acima como documento(s).
 
 Analise com base no documento anexado:
 1. O argumento da dissertação é coerente com o que a obra realmente afirma?
 2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
-3. A ideia atribuída ao autor consta na obra? Em qual parte?
-4. Se for capítulo de compêndio, a autoria está correta (autor do capítulo, não do organizador)?
+3. A ideia atribuída ao autor consta na obra? Em qual trecho específico?
+4. Se for capítulo de compêndio: localize o capítulo do autor citado dentro do livro e verifique se o argumento corresponde ao que aquele capítulo afirma.
 
 Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
@@ -700,8 +766,9 @@ _PROMPT_CLAUDE_TEXTO = """Você é um verificador de integridade acadêmica espe
 TRECHO DA DISSERTAÇÃO com a citação [{citacao}]:
 \"\"\"{contexto}\"\"\"
 
-REFERÊNCIA BIBLIOGRÁFICA: {referencia}
+REFERÊNCIA BIBLIOGRÁFICA COMPLETA: {referencia}
 ARQUIVO FONTE: {arquivo} — leitura: {modo_leitura}
+{info_compendio}
 
 CONTEÚDO DA OBRA:
 \"\"\"{fonte}\"\"\"
@@ -709,8 +776,8 @@ CONTEÚDO DA OBRA:
 Analise com base no conteúdo acima:
 1. O argumento da dissertação é coerente com o que a obra realmente afirma?
 2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
-3. A ideia atribuída ao autor consta na obra? Em qual parte?
-4. Se for capítulo de compêndio, a autoria está correta (autor do capítulo, não do organizador)?
+3. A ideia atribuída ao autor consta na obra? Em qual trecho específico?
+4. Se for capítulo de compêndio: localize o capítulo do autor citado e verifique se o argumento corresponde ao que aquele capítulo afirma.
 
 Responda SOMENTE com JSON (sem markdown):
 {{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
@@ -754,25 +821,42 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
                                               janela=_LIMITE_TEXTO_COMPLETO)
                 modo = f"texto — seleção ({len(texto_fonte)//1024} KB total)"
 
+            # Detecta compêndio para instruir Claude
+            eh_comp = bool(re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE))
+            info_comp = (
+                f"ATENÇÃO — COMPÊNDIO: Este é um capítulo de livro organizado. "
+                f"Localize no arquivo o capítulo escrito por {ref.sobrenome} "
+                f"e verifique o argumento nesse capítulo específico, não no texto do organizador."
+                if eh_comp else ""
+            )
             prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
                 contexto=cit.contexto[:1200],
-                referencia=ref.texto[:300],
+                referencia=ref.texto[:400],
                 arquivo=arquivo,
                 modo_leitura=modo,
+                info_compendio=info_comp,
                 fonte=fonte_txt,
             )
             content = [{"type": "text", "text": prompt_txt}]
         else:
             # PDF nativo: documentos + prompt de análise
+            eh_comp = bool(re.search(r"\bIn:\s*", ref.texto, re.IGNORECASE))
+            info_comp = (
+                f"ATENÇÃO — COMPÊNDIO: Este é um capítulo de livro organizado. "
+                f"Localize no arquivo o capítulo escrito por {ref.sobrenome} "
+                f"e verifique o argumento nesse capítulo específico, não no texto do organizador."
+                if eh_comp else ""
+            )
             prompt_txt = _PROMPT_CLAUDE.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
                 contexto=cit.contexto[:1200],
-                referencia=ref.texto[:300],
+                referencia=ref.texto[:400],
                 arquivo=arquivo,
                 modo_leitura=modo,
+                info_compendio=info_comp,
             )
             content = blocos_doc + [{"type": "text", "text": prompt_txt}]
 
@@ -925,7 +1009,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.2")
+    L("VERSÃO: 2025-06-02-v8.3")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1042,9 +1126,10 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         candidatos_semantica = []  # (cit, ref_ou_None, arq, arq_path, txt)
 
         if pareamentos:
-            L(f"  → Buscando fontes para {len(pareamentos)} par(es) citação↔referência...")
+            L(f"  → Localizando arquivos para {len(pareamentos)} par(es) citação↔referência...")
         for cit, ref in pareamentos:
-            arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
+            # Usa o texto COMPLETO da referência para matching por título
+            arq, txt = _buscar_fonte(cit.autores[0], cit.ano, ref.texto, material, log_fn=L)
             arq_path = material_paths.get(arq) if arq else None
             candidatos_semantica.append((cit, ref, arq, arq_path, txt))
 
@@ -1052,8 +1137,8 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         sem_ref_com_fonte = []
         for cit in citadas_sem_ref:
             arq, txt = _buscar_fonte(cit.autores[0], cit.ano,
-                                     " ".join(cit.autores), material)
-            if arq:   # arq="" significa nenhum arquivo encontrado pelo nome
+                                     " ".join(cit.autores), material, log_fn=L)
+            if arq:
                 arq_path = material_paths.get(arq) if arq else None
                 sem_ref_com_fonte.append((cit, None, arq, arq_path, txt))
 
@@ -1321,7 +1406,7 @@ def _iniciar_gui():
     btn_iniciar.configure(command=iniciar)
     btn_parar.configure(command=parar)
 
-    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.2]")
+    log("Bem-vindo ao Verificador de Citações Acadêmicas  [versão 2025-06-02-v8.3]")
     log("1. Selecione o arquivo da dissertação (.docx)")
     log("2. Selecione a pasta com os arquivos de referência (PDF, DOCX, TXT)")
     log("3. Informe a chave API Claude (opcional) para verificação de coerência")
