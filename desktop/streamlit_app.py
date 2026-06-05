@@ -219,7 +219,7 @@ if rodar:
                 import subprocess
                 with st.spinner("☁️  Baixando arquivos do Google Drive…"):
                     r = subprocess.run(
-                        ["gdown", "--folder", "--remaining-ok", drive_url, "-O", refs_dir],
+                        ["gdown", "--folder", drive_url, "-O", refs_dir],
                         capture_output=True, text=True, timeout=600,
                     )
                 if r.returncode != 0:
