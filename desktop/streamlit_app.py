@@ -112,30 +112,53 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PASSO 2 — OBRAS DE REFERÊNCIA (ZIP)
+# PASSO 2 — OBRAS DE REFERÊNCIA
 # ════════════════════════════════════════════════════════════════════════════
 
 st.markdown('<div class="passo">', unsafe_allow_html=True)
-st.subheader("2️⃣  Obras de referência (.zip)")
+st.subheader("2️⃣  Obras de referência")
 
-with st.expander("ℹ️  Como criar o arquivo ZIP no tablet Android"):
-    st.markdown("""
-1. Instale o app **ZArchiver** na Play Store (gratuito)
-2. Abra o ZArchiver e navegue até a pasta com os PDFs (no pen drive ou no tablet)
-3. Toque e **segure** a pasta → toque em **Comprimir**
-4. Escolha o formato **ZIP** → toque em **OK**
-5. O arquivo `.zip` vai aparecer na mesma pasta — envie ele aqui
+aba_drive, aba_zip = st.tabs(["☁️  Google Drive (recomendado — sem limite de tamanho)", "📦  Upload ZIP (até 1 GB)"])
+
+with aba_drive:
+    st.markdown(
+        "Compartilhe a pasta do Google Drive e cole o link aqui. "
+        "O sistema vai baixar os arquivos automaticamente."
+    )
+    with st.expander("ℹ️  Como compartilhar a pasta no Google Drive"):
+        st.markdown("""
+1. Copie a pasta de obras do **pen drive para o Google Drive** (pelo app Google Drive ou pelo app Arquivos do Android)
+2. Abra o Google Drive no navegador → clique com botão direito (ou segure) na pasta → **Compartilhar**
+3. Mude para **"Qualquer pessoa com o link"** → copie o link
+4. Cole o link abaixo
 """)
+    drive_url = st.text_input(
+        "Link do Google Drive",
+        placeholder="https://drive.google.com/drive/folders/...",
+        label_visibility="collapsed",
+        key="drive_url",
+    )
+    if drive_url:
+        st.success("✅ Link recebido — os arquivos serão baixados ao iniciar a análise.")
 
-zip_file = st.file_uploader(
-    "Selecione o .zip com todos os PDFs e DOCXs das obras",
-    type=["zip"],
-    key="refs_zip",
-    label_visibility="collapsed",
-)
-if zip_file:
-    size_mb = zip_file.size / (1024 * 1024)
-    st.success(f"✅ **{zip_file.name}** — {size_mb:.1f} MB")
+with aba_zip:
+    st.markdown("Para pastas **menores que 1 GB**. Compacte a pasta em ZIP antes de enviar.")
+    with st.expander("ℹ️  Como criar o ZIP no tablet Android"):
+        st.markdown("""
+1. Instale o **ZArchiver** (gratuito, Play Store)
+2. Navegue até a pasta com os PDFs
+3. Segure a pasta → **Comprimir** → formato **ZIP** → OK
+4. Envie o arquivo `.zip` aqui
+""")
+    zip_file = st.file_uploader(
+        "Arquivo .zip com as obras",
+        type=["zip"],
+        key="refs_zip",
+        label_visibility="collapsed",
+    )
+    if zip_file:
+        st.success(f"✅ **{zip_file.name}** — {zip_file.size / (1024*1024):.1f} MB")
+
 st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -170,11 +193,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 rodar = st.button("▶  Iniciar análise", type="primary", use_container_width=True)
 
 if rodar:
+    drive_url = st.session_state.get("drive_url", "").strip()
+    zip_file  = st.session_state.get("refs_zip")
+
     if not docx_file:
         st.error("❌  Selecione o arquivo da dissertação no passo 1.")
         st.stop()
-    if not zip_file:
-        st.error("❌  Selecione o arquivo ZIP com as referências no passo 2.")
+    if not drive_url and not zip_file:
+        st.error("❌  Forneça as obras de referência: link do Google Drive ou arquivo ZIP (passo 2).")
         st.stop()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -184,19 +210,37 @@ if rodar:
         with open(diss_path, "wb") as fh:
             fh.write(docx_file.getbuffer())
 
-        # ── Extrai ZIP ──────────────────────────────────────────────────────
         refs_dir = os.path.join(tmpdir, "refs")
         os.makedirs(refs_dir, exist_ok=True)
-        try:
-            with zipfile.ZipFile(zip_file) as z:
-                for member in z.infolist():
-                    nome = member.filename
-                    if nome.startswith("__") or "/." in nome or nome.endswith("/"):
-                        continue
-                    z.extract(member, refs_dir)
-        except zipfile.BadZipFile:
-            st.error("❌  O arquivo enviado não é um ZIP válido.")
-            st.stop()
+
+        # ── Opção A: baixa do Google Drive ──────────────────────────────────
+        if drive_url:
+            try:
+                import subprocess
+                with st.spinner("☁️  Baixando arquivos do Google Drive…"):
+                    r = subprocess.run(
+                        ["gdown", "--folder", "--remaining-ok", drive_url, "-O", refs_dir],
+                        capture_output=True, text=True, timeout=600,
+                    )
+                if r.returncode != 0:
+                    st.error(f"❌  Erro ao baixar do Drive:\n```\n{r.stderr[-400:]}\n```")
+                    st.stop()
+            except FileNotFoundError:
+                st.error("❌  'gdown' não encontrado. Verifique o requirements.txt.")
+                st.stop()
+
+        # ── Opção B: extrai ZIP ──────────────────────────────────────────────
+        elif zip_file:
+            try:
+                with zipfile.ZipFile(zip_file) as z:
+                    for member in z.infolist():
+                        nome = member.filename
+                        if nome.startswith("__") or "/." in nome or nome.endswith("/"):
+                            continue
+                        z.extract(member, refs_dir)
+            except zipfile.BadZipFile:
+                st.error("❌  O arquivo enviado não é um ZIP válido.")
+                st.stop()
 
         n_refs = sum(
             1 for p in Path(refs_dir).rglob("*")
@@ -204,7 +248,7 @@ if rodar:
         )
 
         if n_refs == 0:
-            st.error("❌  Nenhum arquivo de referência encontrado no ZIP. Verifique o conteúdo.")
+            st.error("❌  Nenhum arquivo de referência encontrado. Verifique o conteúdo enviado.")
             st.stop()
 
         # ── Importa analisar ─────────────────────────────────────────────
