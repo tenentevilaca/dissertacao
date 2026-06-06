@@ -151,13 +151,26 @@ with st.container(border=True):
                 st.warning("Cole o link do Google Drive primeiro.")
             else:
                 try:
+                    import re
                     import gdown
                     import tempfile as _tmp
+
+                    # Extrai o file ID de qualquer formato de URL do Drive
+                    _url = drive_url.strip()
+                    _m = re.search(r'/file/d/([a-zA-Z0-9_-]+)', _url)
+                    if not _m:
+                        _m = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', _url)
+                    if _m:
+                        _file_id = _m.group(1)
+                        _download_url = f"https://drive.google.com/uc?export=download&id={_file_id}"
+                    else:
+                        _download_url = _url  # tenta usar direto
+
                     with st.status("⬇️  Baixando do Google Drive…", expanded=True) as _st:
                         st.write("Conectando ao Drive…")
                         with _tmp.TemporaryDirectory() as _td:
                             _out = os.path.join(_td, "refs_drive.zip")
-                            gdown.download(drive_url.strip(), _out, quiet=True, fuzzy=True)
+                            gdown.download(_download_url, _out, quiet=True)
                             if not os.path.exists(_out) or os.path.getsize(_out) < 100:
                                 _st.update(label="❌  Falha no download", state="error")
                                 st.error(
