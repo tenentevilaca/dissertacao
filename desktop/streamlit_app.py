@@ -119,11 +119,72 @@ if "refs_acumulados" not in st.session_state:
 with st.container(border=True):
     st.markdown("### 2️⃣ &nbsp;Obras de referência")
 
-    aba_zip, aba_multi, aba_um = st.tabs([
-        "📦 ZIP (recomendado)",
+    aba_drive, aba_zip, aba_multi, aba_um = st.tabs([
+        "☁️ Google Drive (700 MB+)",
+        "📦 ZIP local",
         "🗂️ Vários arquivos",
         "➕ Um por vez",
     ])
+
+    # ── ABA GOOGLE DRIVE ─────────────────────────────────────────────────────
+    with aba_drive:
+        st.caption(
+            "**Melhor opção para arquivos grandes (ex: 700 MB).**  \n"
+            "Suba o ZIP para o Google Drive, compartilhe com "
+            "\"Qualquer pessoa com o link\" e cole o link abaixo. "
+            "O servidor baixa direto — sem passar pelo tablet."
+        )
+        st.markdown(
+            "**Como obter o link:**  \n"
+            "1. Abra o Google Drive &nbsp;·&nbsp; "
+            "2. Clique com o botão direito no ZIP &nbsp;·&nbsp; "
+            "3. **Compartilhar → Qualquer pessoa com o link** &nbsp;·&nbsp; "
+            "4. Copie o link e cole aqui"
+        )
+        drive_url = st.text_input(
+            "Link do Google Drive",
+            placeholder="https://drive.google.com/file/d/…/view",
+            label_visibility="collapsed",
+        )
+        if st.button("⬇️  Baixar do Drive e extrair", key="btn_drive", use_container_width=True):
+            if not drive_url.strip():
+                st.warning("Cole o link do Google Drive primeiro.")
+            else:
+                try:
+                    import gdown
+                    import tempfile as _tmp
+                    with st.status("⬇️  Baixando do Google Drive…", expanded=True) as _st:
+                        st.write("Conectando ao Drive…")
+                        with _tmp.TemporaryDirectory() as _td:
+                            _out = os.path.join(_td, "refs_drive.zip")
+                            gdown.download(drive_url.strip(), _out, quiet=True, fuzzy=True)
+                            if not os.path.exists(_out) or os.path.getsize(_out) < 100:
+                                _st.update(label="❌  Falha no download", state="error")
+                                st.error(
+                                    "Não foi possível baixar o arquivo. Verifique:\n"
+                                    "- O link está público (\"Qualquer pessoa com o link\")\n"
+                                    "- O arquivo é um ZIP válido"
+                                )
+                            else:
+                                st.write("Extraindo arquivos…")
+                                with zipfile.ZipFile(_out) as _z:
+                                    nomes_validos = [
+                                        n for n in _z.namelist()
+                                        if Path(n).suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
+                                        and not Path(n).name.startswith(".")
+                                        and not Path(n).name.startswith("__")
+                                    ]
+                                    for nome_zip in nomes_validos:
+                                        nome_base = Path(nome_zip).name
+                                        st.session_state["refs_acumulados"][nome_base] = _z.read(nome_zip)
+                                _st.update(
+                                    label=f"✅  {len(nomes_validos)} arquivo(s) carregados do Drive!",
+                                    state="complete",
+                                    expanded=False,
+                                )
+                                st.rerun()
+                except Exception as e:
+                    st.error(f"❌  Erro: {e}")
 
     # ── ABA ZIP ──────────────────────────────────────────────────────────────
     with aba_zip:
