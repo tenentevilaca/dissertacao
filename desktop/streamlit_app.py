@@ -7,12 +7,45 @@ import os
 import re
 import sys
 import tempfile
+import threading
+import traceback
 import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+
+# ── Job store em nível de processo ────────────────────────────────────────────
+# Sobrevive a reconexões do WebSocket. A análise continua em segundo plano
+# mesmo que o navegador minimize ou desconecte.
+_JOBS: dict = {}   # job_id → {"status", "logs", "resultado", "error"}
+
+
+def _run_job(job_id: str, diss_path: str, refs_dir: str,
+             api_key: str, sem_v: bool) -> None:
+    job = _JOBS.get(job_id)
+    if not job:
+        return
+    job["status"] = "rodando"
+
+    def _log(msg: str) -> None:
+        job["logs"].append(str(msg))
+
+    try:
+        import analisar as _an
+        resultado = _an.analisar(
+            diss_path=diss_path,
+            refs_dir=refs_dir,
+            api_key=api_key,
+            log_fn=_log,
+            sem_verificacao=sem_v,
+        )
+        job["resultado"] = resultado
+        job["status"] = "concluido" if resultado else "vazio"
+    except Exception:
+        job["status"] = "erro"
+        job["error"] = traceback.format_exc()
 
 _here = Path(__file__).parent
 if str(_here) not in sys.path:
@@ -315,10 +348,26 @@ with st.container(border=True):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# RECUPERA JOB AO RECONECTAR (URL param sobrevive a desconexões)
+# ════════════════════════════════════════════════════════════════════════════
+if "job_id" not in st.session_state:
+    _jid_url = st.query_params.get("job", "")
+    if _jid_url and _jid_url in _JOBS:
+        st.session_state["job_id"] = _jid_url
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # BOTÃO INICIAR
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("<br>", unsafe_allow_html=True)
-rodar = st.button("▶  Iniciar análise", type="primary", use_container_width=True)
+
+_job_ativo = st.session_state.get("job_id", "") in _JOBS
+rodar = st.button(
+    "▶  Iniciar análise",
+    type="primary",
+    use_container_width=True,
+    disabled=_job_ativo,
+)
 
 if rodar:
     meta = st.session_state.get("refs_meta", {})
@@ -330,11 +379,8 @@ if rodar:
         st.error("❌  Adicione pelo menos um arquivo de referência (passo 2).")
         st.stop()
 
-    # Não limpa o resultado anterior aqui — só substitui quando o novo estiver pronto
-    st.session_state["analise_erro"] = None  # limpa erro anterior
-
     try:
-        import analisar
+        import analisar  # noqa: F401 — valida disponibilidade
     except ImportError:
         st.error("❌  analisar.py não encontrado. Contate o suporte.")
         st.stop()
@@ -348,54 +394,95 @@ if rodar:
         st.error("❌  Nenhum arquivo de referência encontrado.")
         st.stop()
 
-    # Dissertação vai para temp dir; referências já estão no disco
-    with tempfile.TemporaryDirectory() as tmpdir:
-        diss_path = os.path.join(tmpdir, "dissertacao.docx")
-        with open(diss_path, "wb") as fh:
-            fh.write(docx_file.getbuffer())
+    # Salva dissertação no mesmo diretório persistente das referências
+    diss_path = os.path.join(refs_dir, "_dissertacao.docx")
+    with open(diss_path, "wb") as fh:
+        fh.write(docx_file.getbuffer())
 
-        with st.status(
-            f"🔍  Analisando… ({n_refs} arquivo(s) de referência)",
-            expanded=True,
-        ) as status:
-            try:
-                novo_resultado = analisar.analisar(
-                    diss_path=diss_path,
-                    refs_dir=refs_dir,
-                    api_key=api_key.strip(),
-                    log_fn=st.write,
-                    sem_verificacao=sem_v,
-                )
-                if novo_resultado:
-                    st.session_state["resultado"] = novo_resultado  # substitui só quando pronto
-                    status.update(
-                        label="✅  Análise concluída!", state="complete", expanded=False
-                    )
-                else:
-                    status.update(label="❌  Análise não produziu resultado", state="error")
-                    st.session_state["analise_erro"] = (
-                        "A análise foi executada mas não retornou dados. "
-                        "Verifique se o DOCX contém citações no formato ABNT."
-                    )
-            except Exception as _exc:
-                import traceback as _tb
-                _err = _tb.format_exc()
-                status.update(label=f"❌  Erro na análise — veja abaixo", state="error", expanded=True)
-                st.session_state["analise_erro"] = f"{_exc}\n\n{_err}"
+    # Cria job e inicia thread de fundo
+    job_id = uuid.uuid4().hex[:14]
+    _JOBS[job_id] = {"status": "iniciando", "logs": [], "resultado": None, "error": None}
+    st.session_state["job_id"] = job_id
+    try:
+        st.query_params["job"] = job_id   # persiste na URL para reconexão
+    except Exception:
+        pass
+
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, diss_path, refs_dir, api_key.strip(), sem_v),
+        daemon=True,
+    ).start()
+    st.rerun()
 
 
-# ── Erro (fora do status — sempre visível) ────────────────────────────────────
-if st.session_state.get("analise_erro"):
-    st.error("❌  **Erro durante a análise:**")
-    st.code(st.session_state["analise_erro"], language="")
+# ════════════════════════════════════════════════════════════════════════════
+# PAINEL DE PROGRESSO (polling automático a cada 3 s)
+# ════════════════════════════════════════════════════════════════════════════
+_job_id = st.session_state.get("job_id", "")
+_job    = _JOBS.get(_job_id)
+
+if _job:
+    _status = _job["status"]
+    _logs   = _job.get("logs", [])
+
+    if _status in ("iniciando", "rodando"):
+        # Identifica etapa atual pela última linha de log que começa com "ETAPA"
+        _etapa = next(
+            (l for l in reversed(_logs) if l.strip().startswith("ETAPA")),
+            "Aguardando início…",
+        )
+        st.info(
+            f"⏳ **Análise em segundo plano** — {_etapa}  \n"
+            "Pode minimizar o app. A análise continua e esta página atualiza sozinha.",
+            icon="🔄",
+        )
+        if _logs:
+            with st.expander(f"📋 Log em tempo real ({len(_logs)} linhas)", expanded=False):
+                st.text("\n".join(_logs[-80:]))   # últimas 80 linhas
+
+        import time as _time
+        _time.sleep(3)
+        st.rerun()
+
+    elif _status == "concluido":
+        st.session_state["resultado"] = _job["resultado"]
+        # Limpa job
+        del _JOBS[_job_id]
+        st.session_state.pop("job_id", None)
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
+        st.rerun()
+
+    elif _status == "vazio":
+        st.warning(
+            "⚠️ A análise foi executada mas não retornou dados.  \n"
+            "Verifique se o DOCX contém citações no formato ABNT."
+        )
+        del _JOBS[_job_id]
+        st.session_state.pop("job_id", None)
+
+    elif _status == "erro":
+        st.error("❌  **Erro durante a análise:**")
+        st.code(_job.get("error", ""), language="")
+        del _JOBS[_job_id]
+        st.session_state.pop("job_id", None)
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
 
 
-# ── Exibe resultado (persiste em session_state entre re-runs) ─────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# EXIBE RESULTADO (persiste em session_state entre re-runs)
+# ════════════════════════════════════════════════════════════════════════════
 resultado = st.session_state.get("resultado")
 if resultado:
     try:
         import analisar
-        html     = analisar.gerar_html(resultado)
+        html = analisar.gerar_html(resultado)
     except Exception as _exc:
         st.error(f"❌  Erro ao gerar relatório HTML: {_exc}")
         html = None
