@@ -2,6 +2,7 @@
 """
 Verificador de Citações Acadêmicas — Interface Streamlit (v8.6)
 """
+import io
 import os
 import sys
 import tempfile
@@ -111,58 +112,122 @@ with st.container(border=True):
 # ════════════════════════════════════════════════════════════════════════════
 # PASSO 2 — OBRAS DE REFERÊNCIA
 # ════════════════════════════════════════════════════════════════════════════
+
+if "refs_acumulados" not in st.session_state:
+    st.session_state["refs_acumulados"] = {}  # nome → bytes
+
 with st.container(border=True):
     st.markdown("### 2️⃣ &nbsp;Obras de referência")
-    st.caption("Escolha como enviar os PDFs/DOCXs das obras citadas:")
 
-    aba_arqs, aba_zip = st.tabs([
-        "📄  Selecionar arquivos",
-        "📦  Enviar ZIP",
+    aba_zip, aba_multi, aba_um = st.tabs([
+        "📦 ZIP (recomendado)",
+        "🗂️ Vários arquivos",
+        "➕ Um por vez",
     ])
 
-    with aba_arqs:
-        st.info(
-            "Selecione todos os PDFs e DOCXs de uma vez.\n\n"
-            "**No tablet:** abra o seletor de arquivos → navegue até o pen drive → "
-            "segure um arquivo para entrar no modo de seleção múltipla → selecione todos.",
-            icon="💡",
-        )
-        arquivos_refs = st.file_uploader(
-            "PDFs e DOCXs das obras",
-            type=["pdf", "docx", "doc", "txt"],
-            accept_multiple_files=True,
-            key="refs_arqs",
-            label_visibility="collapsed",
-        )
-        if arquivos_refs:
-            total_mb = sum(f.size for f in arquivos_refs) / (1024 * 1024)
-            st.success(
-                f"✅ **{len(arquivos_refs)} arquivo(s)** selecionado(s) "
-                f"— {total_mb:.1f} MB no total"
-            )
-
+    # ── ABA ZIP ──────────────────────────────────────────────────────────────
     with aba_zip:
-        st.info(
-            "Compacte a pasta inteira em **.zip** e envie aqui (limite: 1 GB).",
-            icon="📦",
+        st.caption(
+            "Compacte todos os PDFs/DOCXs numa pasta ZIP no computador "
+            "e envie de uma vez. Ideal para muitos arquivos."
         )
-        with st.expander("Como criar o ZIP no Android (ZArchiver)"):
-            st.markdown("""
-1. Instale o **ZArchiver** (gratuito — Play Store)
-2. Abra o ZArchiver, navegue até a pasta dos PDFs no pen drive
-3. Segure a pasta → toque em **Comprimir** → formato **ZIP** → OK
-4. Selecione o arquivo `.zip` gerado aqui abaixo
-""")
         zip_file = st.file_uploader(
-            "Arquivo .zip com as obras",
+            "Selecione o arquivo **.zip**",
             type=["zip"],
             key="refs_zip",
             label_visibility="collapsed",
         )
-        if zip_file:
-            st.success(
-                f"✅ **{zip_file.name}** — {zip_file.size / (1024 * 1024):.1f} MB"
-            )
+        if zip_file is not None:
+            try:
+                zip_bytes = io.BytesIO(zip_file.read())
+                with zipfile.ZipFile(zip_bytes) as z:
+                    nomes_validos = [
+                        n for n in z.namelist()
+                        if Path(n).suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
+                        and not Path(n).name.startswith(".")
+                        and not Path(n).name.startswith("__")
+                    ]
+                    if nomes_validos:
+                        adicionados = 0
+                        for nome_zip in nomes_validos:
+                            nome_base = Path(nome_zip).name
+                            st.session_state["refs_acumulados"][nome_base] = z.read(nome_zip)
+                            adicionados += 1
+                        st.success(
+                            f"✅ **{adicionados} arquivo(s)** extraídos do ZIP "
+                            f"e adicionados à fila!"
+                        )
+                    else:
+                        st.warning(
+                            "⚠️ Nenhum PDF/DOCX/TXT encontrado dentro do ZIP. "
+                            "Verifique o conteúdo do arquivo."
+                        )
+            except zipfile.BadZipFile:
+                st.error("❌ Arquivo ZIP inválido ou corrompido. Tente compactar novamente.")
+            except Exception as e:
+                st.error(f"❌ Erro ao processar ZIP: {e}")
+
+    # ── ABA VÁRIOS ARQUIVOS ───────────────────────────────────────────────────
+    with aba_multi:
+        st.caption(
+            "Selecione múltiplos arquivos de uma vez "
+            "(segure Ctrl ou Shift no computador, ou selecione um a um no Android)."
+        )
+        multi_arqs = st.file_uploader(
+            "Selecione PDFs e DOCXs",
+            type=["pdf", "docx", "doc", "txt"],
+            accept_multiple_files=True,
+            key="refs_multi",
+            label_visibility="collapsed",
+        )
+        if multi_arqs:
+            adicionados = 0
+            for arq in multi_arqs:
+                if arq.name not in st.session_state["refs_acumulados"]:
+                    st.session_state["refs_acumulados"][arq.name] = arq.getbuffer().tobytes()
+                    adicionados += 1
+            if adicionados:
+                st.success(f"✅ **{adicionados} arquivo(s) novos** adicionados à fila!")
+
+    # ── ABA UM POR VEZ ───────────────────────────────────────────────────────
+    with aba_um:
+        st.caption("Envie os arquivos um por vez — útil quando os outros métodos não funcionam.")
+        novo_arq = st.file_uploader(
+            "Selecione um arquivo",
+            type=["pdf", "docx", "doc", "txt"],
+            key="refs_individual",
+            label_visibility="collapsed",
+        )
+        if novo_arq is not None:
+            st.session_state["refs_acumulados"][novo_arq.name] = novo_arq.getbuffer().tobytes()
+
+    # ── FILA ACUMULADA ────────────────────────────────────────────────────────
+    total = st.session_state["refs_acumulados"]
+    n_total = len(total)
+    mb_total = sum(len(b) for b in total.values()) / (1024 * 1024)
+
+    st.markdown("---")
+    if n_total > 0:
+        st.success(f"✅ **{n_total} arquivo(s)** na fila — {mb_total:.1f} MB total")
+        with st.expander(f"Ver lista ({n_total} arquivos)"):
+            for nome in list(total.keys()):
+                col_nome, col_del = st.columns([5, 1])
+                col_nome.markdown(
+                    f"📄 {nome} &nbsp;<small>({len(total[nome])//1024} KB)</small>",
+                    unsafe_allow_html=True,
+                )
+                if col_del.button("✕", key=f"del_{nome}", help="Remover"):
+                    del st.session_state["refs_acumulados"][nome]
+                    st.rerun()
+        if st.button("🗑️  Limpar todos os arquivos", use_container_width=True):
+            st.session_state["refs_acumulados"] = {}
+            st.rerun()
+    else:
+        st.info(
+            "Nenhum arquivo adicionado ainda. "
+            "Use uma das abas acima para enviar os arquivos.",
+            icon="📂",
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -198,14 +263,13 @@ rodar = st.button(
 )
 
 if rodar:
-    arquivos_refs = st.session_state.get("refs_arqs") or []
-    zip_file      = st.session_state.get("refs_zip")
+    refs_acumulados = st.session_state.get("refs_acumulados", {})
 
     if not docx_file:
         st.error("❌  Selecione o arquivo da dissertação (passo 1).")
         st.stop()
-    if not arquivos_refs and not zip_file:
-        st.error("❌  Forneça as obras de referência — arquivos ou ZIP (passo 2).")
+    if not refs_acumulados:
+        st.error("❌  Adicione pelo menos um arquivo de referência (passo 2).")
         st.stop()
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,24 +282,10 @@ if rodar:
         refs_dir = os.path.join(tmpdir, "refs")
         os.makedirs(refs_dir, exist_ok=True)
 
-        # Opção A: arquivos individuais
-        if arquivos_refs:
-            for arq in arquivos_refs:
-                with open(os.path.join(refs_dir, arq.name), "wb") as fh:
-                    fh.write(arq.getbuffer())
-
-        # Opção B: ZIP
-        elif zip_file:
-            try:
-                with zipfile.ZipFile(zip_file) as z:
-                    for member in z.infolist():
-                        nome = member.filename
-                        if nome.startswith("__") or "/." in nome or nome.endswith("/"):
-                            continue
-                        z.extract(member, refs_dir)
-            except zipfile.BadZipFile:
-                st.error("❌  O arquivo não é um ZIP válido.")
-                st.stop()
+        # Salva todos os arquivos acumulados
+        for nome, conteudo in refs_acumulados.items():
+            with open(os.path.join(refs_dir, nome), "wb") as fh:
+                fh.write(conteudo)
 
         n_refs = sum(
             1 for p in Path(refs_dir).rglob("*")
