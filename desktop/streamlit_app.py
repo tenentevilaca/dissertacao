@@ -437,7 +437,9 @@ if rodar:
         args=(job_id, diss_path, refs_dir, api_key.strip(), sem_v),
         daemon=True,
     ).start()
-    st.rerun()
+    # Não chama st.rerun() — deixa o script continuar naturalmente para que
+    # a URL (?job=<id>) seja enviada ao browser junto com a resposta atual.
+    # O JS timer abaixo fará o reload quando necessário.
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -461,10 +463,12 @@ if _job:
             "Página atualiza a cada 8 s automaticamente.",
             icon="🔄",
         )
-        # Mostra as últimas linhas do log abertamente (sem expander)
+        # Mostra log sempre — com conteúdo ou com mensagem de espera
+        st.markdown(f"**📋 Log de progresso ({len(_logs)} linha(s)):**")
         if _logs:
-            st.markdown(f"**📋 Log — {len(_logs)} linha(s):**")
             st.code("\n".join(_logs[-60:]), language="")
+        else:
+            st.caption("⏳ Iniciando análise… aguarde as primeiras mensagens.")
 
         # Reload pelo lado do cliente — funciona mesmo com WebSocket fechado.
         # Quando o browser voltar ao primeiro plano, o timer dispara e
