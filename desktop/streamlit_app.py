@@ -83,6 +83,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ── Helpers para query_params (compatível com Streamlit >= 1.28) ──────────────
+def _qp_get(key: str, default: str = "") -> str:
+    try:
+        return st.query_params.get(key, default)
+    except AttributeError:
+        return st.experimental_get_query_params().get(key, [default])[0]
+
+def _qp_set(**kwargs) -> None:
+    try:
+        for k, v in kwargs.items():
+            st.query_params[k] = v
+    except AttributeError:
+        try:
+            st.experimental_set_query_params(**kwargs)
+        except Exception:
+            pass
+
+def _qp_clear() -> None:
+    try:
+        st.query_params.clear()
+    except AttributeError:
+        try:
+            st.experimental_set_query_params()
+        except Exception:
+            pass
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # CABEÇALHO
 # ════════════════════════════════════════════════════════════════════════════
@@ -351,7 +378,7 @@ with st.container(border=True):
 # RECUPERA JOB AO RECONECTAR (URL param sobrevive a desconexões)
 # ════════════════════════════════════════════════════════════════════════════
 if "job_id" not in st.session_state:
-    _jid_url = st.query_params.get("job", "")
+    _jid_url = _qp_get("job")
     if _jid_url and _jid_url in _JOBS:
         st.session_state["job_id"] = _jid_url
 
@@ -403,10 +430,7 @@ if rodar:
     job_id = uuid.uuid4().hex[:14]
     _JOBS[job_id] = {"status": "iniciando", "logs": [], "resultado": None, "error": None}
     st.session_state["job_id"] = job_id
-    try:
-        st.query_params["job"] = job_id   # persiste na URL para reconexão
-    except Exception:
-        pass
+    _qp_set(job=job_id)   # persiste na URL para reconexão
 
     threading.Thread(
         target=_run_job,
@@ -427,33 +451,34 @@ if _job:
     _logs   = _job.get("logs", [])
 
     if _status in ("iniciando", "rodando"):
-        # Identifica etapa atual pela última linha de log que começa com "ETAPA"
         _etapa = next(
             (l for l in reversed(_logs) if l.strip().startswith("ETAPA")),
             "Aguardando início…",
         )
         st.info(
-            f"⏳ **Análise em segundo plano** — {_etapa}  \n"
-            "Pode minimizar o app. A análise continua e esta página atualiza sozinha.",
+            f"⏳ **Análise rodando em segundo plano** — {_etapa}  \n"
+            "Pode minimizar o app ou trocar de tela — a análise continua no servidor "
+            "e esta página **recarrega automaticamente** a cada 8 segundos.",
             icon="🔄",
         )
         if _logs:
-            with st.expander(f"📋 Log em tempo real ({len(_logs)} linhas)", expanded=False):
-                st.text("\n".join(_logs[-80:]))   # últimas 80 linhas
+            with st.expander(f"📋 Log ({len(_logs)} linhas)", expanded=False):
+                st.text("\n".join(_logs[-80:]))
 
-        import time as _time
-        _time.sleep(3)
-        st.rerun()
+        # Reload pelo lado do cliente — funciona mesmo com WebSocket fechado.
+        # Quando o browser voltar ao primeiro plano, o timer dispara e
+        # recarrega a página, que recupera o job pela URL (?job=<id>).
+        import streamlit.components.v1 as _sc
+        _sc.html(
+            "<script>setTimeout(()=>window.parent.location.reload(),8000)</script>",
+            height=0,
+        )
 
     elif _status == "concluido":
         st.session_state["resultado"] = _job["resultado"]
-        # Limpa job
         del _JOBS[_job_id]
         st.session_state.pop("job_id", None)
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
+        _qp_clear()
         st.rerun()
 
     elif _status == "vazio":
@@ -463,16 +488,14 @@ if _job:
         )
         del _JOBS[_job_id]
         st.session_state.pop("job_id", None)
+        _qp_clear()
 
     elif _status == "erro":
         st.error("❌  **Erro durante a análise:**")
         st.code(_job.get("error", ""), language="")
         del _JOBS[_job_id]
         st.session_state.pop("job_id", None)
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
+        _qp_clear()
 
 
 # ════════════════════════════════════════════════════════════════════════════
