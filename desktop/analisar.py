@@ -433,7 +433,7 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                     for r in referencias:
                         try:
                             ano_ref = int(r.ano[:4])
-                        except ValueError:
+                        except (ValueError, TypeError, AttributeError):
                             continue
                         if (abs(ano_cit - ano_ref) <= 1
                                 and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes)):

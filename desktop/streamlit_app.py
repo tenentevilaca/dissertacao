@@ -110,6 +110,10 @@ def _clear_files() -> None:
 
 # Garante que os dicts existam mesmo antes de qualquer widget
 _refs_dir()
+if "resultado"    not in st.session_state:
+    st.session_state["resultado"]    = None
+if "analise_erro" not in st.session_state:
+    st.session_state["analise_erro"] = None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -326,7 +330,8 @@ if rodar:
         st.error("❌  Adicione pelo menos um arquivo de referência (passo 2).")
         st.stop()
 
-    st.session_state["resultado"] = None  # limpa resultado anterior
+    # Não limpa o resultado anterior aqui — só substitui quando o novo estiver pronto
+    st.session_state["analise_erro"] = None  # limpa erro anterior
 
     try:
         import analisar
@@ -354,25 +359,35 @@ if rodar:
             expanded=True,
         ) as status:
             try:
-                resultado = analisar.analisar(
+                novo_resultado = analisar.analisar(
                     diss_path=diss_path,
                     refs_dir=refs_dir,
                     api_key=api_key.strip(),
                     log_fn=st.write,
                     sem_verificacao=sem_v,
                 )
-                st.session_state["resultado"] = resultado
-                if resultado:
+                if novo_resultado:
+                    st.session_state["resultado"] = novo_resultado  # substitui só quando pronto
                     status.update(
                         label="✅  Análise concluída!", state="complete", expanded=False
                     )
                 else:
                     status.update(label="❌  Análise não produziu resultado", state="error")
+                    st.session_state["analise_erro"] = (
+                        "A análise foi executada mas não retornou dados. "
+                        "Verifique se o DOCX contém citações no formato ABNT."
+                    )
             except Exception as _exc:
                 import traceback as _tb
-                status.update(label=f"❌  Erro: {_exc}", state="error")
-                st.error("**Erro durante a análise — detalhes:**")
-                st.code(_tb.format_exc())
+                _err = _tb.format_exc()
+                status.update(label=f"❌  Erro na análise — veja abaixo", state="error", expanded=True)
+                st.session_state["analise_erro"] = f"{_exc}\n\n{_err}"
+
+
+# ── Erro (fora do status — sempre visível) ────────────────────────────────────
+if st.session_state.get("analise_erro"):
+    st.error("❌  **Erro durante a análise:**")
+    st.code(st.session_state["analise_erro"], language="")
 
 
 # ── Exibe resultado (persiste em session_state entre re-runs) ─────────────────
@@ -380,10 +395,12 @@ resultado = st.session_state.get("resultado")
 if resultado:
     try:
         import analisar
-    except ImportError:
-        pass
-    else:
         html     = analisar.gerar_html(resultado)
+    except Exception as _exc:
+        st.error(f"❌  Erro ao gerar relatório HTML: {_exc}")
+        html = None
+
+    if html:
         nome_rel = f"relatorio_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
 
         st.success("### ✅  Relatório pronto!")
