@@ -486,6 +486,11 @@ _STOPWORDS = {
 }
 
 
+def _sanitizar(texto: str) -> str:
+    """Remove bytes nulos e caracteres de controle que invalidam JSON na API."""
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ', texto)
+
+
 def _trecho_relevante(contexto: str, texto_fonte: str, janela: int = 20000) -> str:
     """Seleciona os trechos mais relevantes do texto fonte para enviar à IA.
     Envia até `janela` caracteres (~10 páginas) distribuídos pelos parágrafos
@@ -867,8 +872,8 @@ def verificar_grupo_claude(grupo: list, arquivo: str,
 
         try:
             if texto_fonte:
-                fonte_txt = _trecho_relevante(sub_contextos + " " + todos_contextos,
-                                              texto_fonte, janela=_LIMITE_TEXTO_GRUPO)
+                fonte_txt = _sanitizar(_trecho_relevante(sub_contextos + " " + todos_contextos,
+                                              texto_fonte, janela=_LIMITE_TEXTO_GRUPO))
                 modo = f"texto {len(fonte_txt)//1024}KB/{len(texto_fonte)//1024}KB"
                 _log(f"     → texto {len(fonte_txt):,} chars de {len(texto_fonte):,} — lote {inicio//10+1}/{-(-len(grupo)//_MAX_CITS_POR_CHAMADA)}")
                 prompt = (
@@ -1022,8 +1027,8 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
         # ── PRIORIDADE 1: texto extraído (token-eficiente, evita rate limit) ──
         # Com PyMuPDF instalado, sempre preferimos texto. PDF nativo só como fallback.
         if texto_fonte:
-            fonte_txt = _trecho_relevante(cit.contexto, texto_fonte,
-                                          janela=_LIMITE_TEXTO_SEMANTICA)
+            fonte_txt = _sanitizar(_trecho_relevante(cit.contexto, texto_fonte,
+                                          janela=_LIMITE_TEXTO_SEMANTICA))
             modo = f"texto ({len(texto_fonte)//1024} KB total → seleção {len(fonte_txt)//1024} KB)"
             prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
                 regras_abnt=_REGRAS_ABNT,
