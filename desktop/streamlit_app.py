@@ -326,50 +326,66 @@ if rodar:
         st.error("❌  Adicione pelo menos um arquivo de referência (passo 2).")
         st.stop()
 
-    # Dissertação vai para um temp dir próprio; referências já estão no disco
+    st.session_state["resultado"] = None  # limpa resultado anterior
+
+    try:
+        import analisar
+    except ImportError:
+        st.error("❌  analisar.py não encontrado. Contate o suporte.")
+        st.stop()
+
+    refs_dir = st.session_state["refs_tmpdir"]
+    n_refs = sum(
+        1 for p in Path(refs_dir).rglob("*")
+        if p.suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
+    )
+    if n_refs == 0:
+        st.error("❌  Nenhum arquivo de referência encontrado.")
+        st.stop()
+
+    # Dissertação vai para temp dir; referências já estão no disco
     with tempfile.TemporaryDirectory() as tmpdir:
         diss_path = os.path.join(tmpdir, "dissertacao.docx")
         with open(diss_path, "wb") as fh:
             fh.write(docx_file.getbuffer())
 
-        refs_dir = st.session_state["refs_tmpdir"]  # já populado, sem copiar nada
-
-        n_refs = sum(
-            1 for p in Path(refs_dir).rglob("*")
-            if p.suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
-        )
-        if n_refs == 0:
-            st.error("❌  Nenhum arquivo de referência encontrado.")
-            st.stop()
-
-        try:
-            import analisar
-        except ImportError:
-            st.error("❌  analisar.py não encontrado. Contate o suporte.")
-            st.stop()
-
-        resultado = None
         with st.status(
             f"🔍  Analisando… ({n_refs} arquivo(s) de referência)",
             expanded=True,
         ) as status:
-            resultado = analisar.analisar(
-                diss_path=diss_path,
-                refs_dir=refs_dir,
-                api_key=api_key.strip(),
-                log_fn=st.write,
-                sem_verificacao=sem_v,
-            )
-            if resultado:
-                status.update(label="✅  Análise concluída!", state="complete", expanded=False)
-            else:
-                status.update(label="❌  Análise não produziu resultado", state="error")
+            try:
+                resultado = analisar.analisar(
+                    diss_path=diss_path,
+                    refs_dir=refs_dir,
+                    api_key=api_key.strip(),
+                    log_fn=st.write,
+                    sem_verificacao=sem_v,
+                )
+                st.session_state["resultado"] = resultado
+                if resultado:
+                    status.update(
+                        label="✅  Análise concluída!", state="complete", expanded=False
+                    )
+                else:
+                    status.update(label="❌  Análise não produziu resultado", state="error")
+            except Exception as _exc:
+                import traceback as _tb
+                status.update(label=f"❌  Erro: {_exc}", state="error")
+                st.error("**Erro durante a análise — detalhes:**")
+                st.code(_tb.format_exc())
 
-    if resultado:
+
+# ── Exibe resultado (persiste em session_state entre re-runs) ─────────────────
+resultado = st.session_state.get("resultado")
+if resultado:
+    try:
+        import analisar
+    except ImportError:
+        pass
+    else:
         html     = analisar.gerar_html(resultado)
         nome_rel = f"relatorio_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
 
-        st.balloons()
         st.success("### ✅  Relatório pronto!")
         st.download_button(
             label="📥  Baixar relatório HTML",
