@@ -456,14 +456,15 @@ if _job:
             "Aguardando início…",
         )
         st.info(
-            f"⏳ **Análise rodando em segundo plano** — {_etapa}  \n"
-            "Pode minimizar o app ou trocar de tela — a análise continua no servidor "
-            "e esta página **recarrega automaticamente** a cada 8 segundos.",
+            f"⏳ **{_etapa}**  \n"
+            "A análise continua mesmo se minimizar o app. "
+            "Página atualiza a cada 8 s automaticamente.",
             icon="🔄",
         )
+        # Mostra as últimas linhas do log abertamente (sem expander)
         if _logs:
-            with st.expander(f"📋 Log ({len(_logs)} linhas)", expanded=False):
-                st.text("\n".join(_logs[-80:]))
+            st.markdown(f"**📋 Log — {len(_logs)} linha(s):**")
+            st.code("\n".join(_logs[-60:]), language="")
 
         # Reload pelo lado do cliente — funciona mesmo com WebSocket fechado.
         # Quando o browser voltar ao primeiro plano, o timer dispara e
