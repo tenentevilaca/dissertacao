@@ -304,7 +304,7 @@ with st.container(border=True):
                                     validos = [
                                         n for n in _z.namelist()
                                         if Path(n).suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
-                                        and not Path(n).name.startswith((".", "__"))
+                                        and not Path(n).name.startswith((".", "__", "~$"))
                                     ]
                                     for nz in validos:
                                         _add_file(Path(nz).name, _z.read(nz))
@@ -331,7 +331,7 @@ with st.container(border=True):
                     validos = [
                         n for n in z.namelist()
                         if Path(n).suffix.lower() in {".pdf", ".docx", ".doc", ".txt"}
-                        and not Path(n).name.startswith((".", "__"))
+                        and not Path(n).name.startswith((".", "__", "~$"))
                     ]
                     if validos:
                         for nz in validos:
