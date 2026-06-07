@@ -278,10 +278,16 @@ def extrair_referencias(texto: str, idx_refs: int, log_fn=None) -> list:
     # 1ª alt: SOBRENOME, (nome pessoal)
     # 2ª alt: BRASIL. / OSCE. (institucional de 1 palavra seguida de ponto)
     # 3ª alt: ORGANIZAÇÃO PARA A... (SIGLA). ou FÓRUM BRASILEIRO... (institucional multi-palavra)
+    # 4ª alt: LAS FUERZAS: periódico... (entrada com título em caixa-alta seguido
+    # de dois-pontos — convenção ABNT para obras sem autoria pessoal/institucional,
+    # onde a entrada é alfabetada pelo próprio título). Limites de tamanho mínimo
+    # (1ª palavra ≥3 maiúsculas, demais ≥3 ao todo) evitam falso-positivo em
+    # fragmentos comuns como "DISPONÍVEL EM:" (EM tem 2 letras, não casa).
     _RE_NOVA = re.compile(
         r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}[a-záéíóúâêîôûãõàç\'\-]*\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*)+\s*(?:\([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12}\)\s*)?[,.]"
+        r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{3,}(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]{2,})+\s*:"
     )
     _RE_AUTORES_REF = re.compile(
         r"([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\']+),"
@@ -303,19 +309,36 @@ def extrair_referencias(texto: str, idx_refs: int, log_fn=None) -> list:
             # para casar com citações abreviadas — ex.: "Fórum Brasileiro de
             # Segurança Pública" → "FBSP"; "Organização para a Segurança e
             # Cooperação na Europa" → "OSCE".
-            m_inst = re.match(
-                r"^((?:[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*\s+){1,7}"
-                r"[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*)[\.,]", t
-            )
-            if m_inst:
-                _stop_sigla = {'de', 'da', 'do', 'das', 'dos', 'e', 'a', 'o', 'as',
-                               'os', 'para', 'em', 'no', 'na', 'nos', 'nas',
-                               'com', 'por', 'à', 'ao', 'um', 'uma'}
-                palavras = m_inst.group(1).split()
-                sigla_gerada = "".join(p[0].upper() for p in palavras
-                                       if p.lower() not in _stop_sigla)
-                if 2 <= len(sigla_gerada) <= 10 and sigla_gerada not in resultado:
-                    resultado.append(sigla_gerada)
+            # Referências institucionais ABNT costumam aninhar o órgão dentro da
+            # jurisdição — ex.: "UNITED STATES. Department of Justice; Department
+            # of Homeland Security. Baseline capabilities..." É o ÓRGÃO (DOJ, DHS),
+            # não a jurisdição (US), que aparece na citação no texto. Por isso
+            # percorre cada segmento (separado por "." ou ";") gerando uma sigla
+            # para cada um que tenha "cara" de nome institucional (todas as
+            # palavras iniciam maiúsculas ou são stopwords), parando no primeiro
+            # segmento que pareça título (contém palavra minúscula não-stopword,
+            # ex.: "Baseline capabilities for state...").
+            _stop_sigla = {'de', 'da', 'do', 'das', 'dos', 'e', 'a', 'o', 'as',
+                           'os', 'para', 'em', 'no', 'na', 'nos', 'nas',
+                           'com', 'por', 'à', 'ao', 'um', 'uma',
+                           'of', 'the', 'and', 'for', 'in', 'on', 'to'}
+            for seg in re.split(r'[\.;]\s+', t[:300])[:5]:
+                palavras = seg.split()
+                if not palavras or len(palavras) > 8:
+                    break
+                if not all(re.match(r'^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]', p) or p.lower() in _stop_sigla
+                           for p in palavras):
+                    break
+                # Gera duas variantes por segmento: excluindo e incluindo "of" —
+                # convenção inglesa é inconsistente (Department OF Justice → DOJ
+                # inclui o "of", mas Department OF Homeland Security → DHS não),
+                # e não há como saber qual sem a sigla declarada na própria obra.
+                for incluir_of in (False, True):
+                    _stop = _stop_sigla - {'of'} if incluir_of else _stop_sigla
+                    sigla_gerada = "".join(p[0].upper() for p in palavras
+                                           if p.lower() not in _stop)
+                    if 2 <= len(sigla_gerada) <= 10 and sigla_gerada not in resultado:
+                        resultado.append(sigla_gerada)
         # Extrai siglas entre parênteses em QUALQUER ponto da referência — não só
         # no início — para cobrir entradas como "Organização para a Segurança e
         # Cooperação na Europa (OSCE)." onde a sigla vem depois do nome por extenso.
@@ -1479,7 +1502,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.13")
+    L("VERSÃO: 2026-06-07-v8.14")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
