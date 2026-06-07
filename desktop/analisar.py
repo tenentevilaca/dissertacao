@@ -283,11 +283,15 @@ def extrair_referencias(texto: str, idx_refs: int, log_fn=None) -> list:
     # onde a entrada é alfabetada pelo próprio título). Limites de tamanho mínimo
     # (1ª palavra ≥3 maiúsculas, demais ≥3 ao todo) evitam falso-positivo em
     # fragmentos comuns como "DISPONÍVEL EM:" (EM tem 2 letras, não casa).
+    # 5ª alt: OSCE – Organization for Security... (entrada institucional iniciada
+    # pela própria sigla, seguida de travessão e do nome por extenso — outra
+    # convenção ABNT comum em obras de organismos internacionais).
     _RE_NOVA = re.compile(
         r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}[a-záéíóúâêîôûãõàç\'\-]*\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*)+\s*(?:\([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12}\)\s*)?[,.]"
         r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{3,}(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]{2,})+\s*:"
+        r"|^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12}\s*[–—\-]\s*[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]"
     )
     _RE_AUTORES_REF = re.compile(
         r"([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\']+),"
@@ -1502,7 +1506,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.14")
+    L("VERSÃO: 2026-06-07-v8.15")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
