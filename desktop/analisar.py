@@ -283,13 +283,32 @@ def extrair_referencias(texto: str, idx_refs: int, log_fn=None) -> list:
             )
             if m:
                 resultado = [m.group(1).upper()]
+            # Nome institucional grafado por extenso, sem sigla declarada entre
+            # parênteses: gera a sigla pelas iniciais das palavras significativas
+            # para casar com citações abreviadas — ex.: "Fórum Brasileiro de
+            # Segurança Pública" → "FBSP"; "Organização para a Segurança e
+            # Cooperação na Europa" → "OSCE".
+            m_inst = re.match(
+                r"^((?:[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*\s+){1,7}"
+                r"[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç]*)[\.,]", t
+            )
+            if m_inst:
+                _stop_sigla = {'de', 'da', 'do', 'das', 'dos', 'e', 'a', 'o', 'as',
+                               'os', 'para', 'em', 'no', 'na', 'nos', 'nas',
+                               'com', 'por', 'à', 'ao', 'um', 'uma'}
+                palavras = m_inst.group(1).split()
+                sigla_gerada = "".join(p[0].upper() for p in palavras
+                                       if p.lower() not in _stop_sigla)
+                if 2 <= len(sigla_gerada) <= 10 and sigla_gerada not in resultado:
+                    resultado.append(sigla_gerada)
         # Extrai siglas entre parênteses em QUALQUER ponto da referência — não só
         # no início — para cobrir entradas como "Organização para a Segurança e
         # Cooperação na Europa (OSCE)." onde a sigla vem depois do nome por extenso.
+        # (Padrão restrito a parênteses propositalmente: buscar siglas soltas após
+        # travessão/dois-pontos também capturava trechos de URLs/nomes de arquivo
+        # nas referências on-line, ex.: "...uploads/2025/relatorio-BRASIL.pdf",
+        # gerando pareamentos falsos.)
         siglas = re.findall(r'\(([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\)', t)
-        # Sigla após travessão/hífen/dois-pontos: "Nome por Extenso – OSCE." ou
-        # "Nome por Extenso: OSCE,"
-        siglas += re.findall(r'[\-–—:]\s*([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\s*[.,;]', t[:300])
         _excluir = {'ORG', 'ED', 'COORD', 'TRAD', 'COMP', 'REV'}
         for s in siglas:
             if s not in resultado and s not in _excluir:
@@ -398,7 +417,12 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
 
     chaves_citadas: set = set()
     pareamentos, citadas_sem_ref = [], []
-    ja_pareados: set = set()
+    # Observação: NÃO deduplicamos pareamentos por referência (id(ref)). Duas
+    # citações distintas — ex.: "(FBSP, 2024)" e "(FBSP, 2025)" — podem casar
+    # com a MESMA entrada bibliográfica (via fuzzy ±1 ano) e ambas precisam
+    # aparecer no relatório e ser verificadas; suprimir a segunda fazia a
+    # citação "desaparecer" silenciosamente (nem pareada, nem listada como
+    # sem referência).
 
     for c in citacoes:
         encontrou = False
@@ -411,10 +435,7 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                 ref = idx_exato[chave]
                 for s in ref.sobrenomes:
                     chaves_citadas.add(f"{s.upper()}_{ref.ano}")
-                par_id = id(ref)
-                if par_id not in ja_pareados:
-                    ja_pareados.add(par_id)
-                    pareamentos.append((c, ref))
+                pareamentos.append((c, ref))
                 encontrou = True
                 break
 
@@ -424,10 +445,7 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                     if r.ano == c.ano and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes):
                         for s in r.sobrenomes:
                             chaves_citadas.add(f"{s.upper()}_{r.ano}")
-                        par_id = id(r)
-                        if par_id not in ja_pareados:
-                            ja_pareados.add(par_id)
-                            pareamentos.append((c, r))
+                        pareamentos.append((c, r))
                         encontrou = True
                         break
 
@@ -444,10 +462,7 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                                 and any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes)):
                             for s in r.sobrenomes:
                                 chaves_citadas.add(f"{s.upper()}_{r.ano}")
-                            par_id = id(r)
-                            if par_id not in ja_pareados:
-                                ja_pareados.add(par_id)
-                                pareamentos.append((c, r))
+                            pareamentos.append((c, r))
                             encontrou = True
                             break
                 except (ValueError, TypeError):
@@ -466,7 +481,12 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                 except (ValueError, TypeError):
                     ano_cit = None
                 for r in referencias:
-                    if not sigla_re.search(r.texto):
+                    # Ignora URLs/links de acesso: trechos como
+                    # ".../uploads/2025/relatorio-BRASIL.pdf" podem conter
+                    # substrings maiúsculas que colidem com siglas/sobrenomes
+                    # e gerar pareamentos falsos.
+                    texto_busca = re.sub(r'https?://\S+|www\.\S+', ' ', r.texto)
+                    if not sigla_re.search(texto_busca):
                         continue
                     try:
                         ano_ref = int(r.ano[:4])
@@ -478,11 +498,8 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                     if ano_ok:
                         for s in r.sobrenomes:
                             chaves_citadas.add(f"{s.upper()}_{r.ano}")
-                        par_id = id(r)
-                        if par_id not in ja_pareados:
-                            ja_pareados.add(par_id)
-                            pareamentos.append((c, r))
-                            _log(f"    [SIGLA-MATCH] {c.texto} ↔ {r.texto[:80]}")
+                        pareamentos.append((c, r))
+                        _log(f"    [SIGLA-MATCH] {c.texto} ↔ {r.texto[:80]}")
                         encontrou = True
                         break
 
@@ -1325,7 +1342,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.9")
+    L("VERSÃO: 2026-06-07-v8.10")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
