@@ -283,8 +283,13 @@ def extrair_referencias(texto: str, idx_refs: int, log_fn=None) -> list:
             )
             if m:
                 resultado = [m.group(1).upper()]
-        # Extrai siglas entre parênteses: "FÓRUM BRASILEIRO (FBSP)." → indexa FBSP
-        siglas = re.findall(r'\(([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\)', t[:300])
+        # Extrai siglas entre parênteses em QUALQUER ponto da referência — não só
+        # no início — para cobrir entradas como "Organização para a Segurança e
+        # Cooperação na Europa (OSCE)." onde a sigla vem depois do nome por extenso.
+        siglas = re.findall(r'\(([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\)', t)
+        # Sigla após travessão/hífen/dois-pontos: "Nome por Extenso – OSCE." ou
+        # "Nome por Extenso: OSCE,"
+        siglas += re.findall(r'[\-–—:]\s*([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,12})\s*[.,;]', t[:300])
         _excluir = {'ORG', 'ED', 'COORD', 'TRAD', 'COMP', 'REV'}
         for s in siglas:
             if s not in resultado and s not in _excluir:
@@ -447,6 +452,39 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                             break
                 except (ValueError, TypeError):
                     pass
+
+            # 4) Sigla institucional: o "sobrenome" citado é uma sigla curta
+            #    (ex.: OSCE, ONU, FBSP, OEA) que pode não abrir a entrada da
+            #    referência — a obra pode estar indexada pelo nome por extenso,
+            #    com a sigla aparecendo entre parênteses, após travessão etc.
+            #    Procuramos a sigla como palavra isolada em qualquer parte do
+            #    texto da referência, com o mesmo ano (ou ano ±1).
+            if not encontrou and 2 <= len(sob) <= 10 and sob.isalpha():
+                sigla_re = re.compile(rf'\b{re.escape(sob)}\b')
+                try:
+                    ano_cit = int(c.ano[:4])
+                except (ValueError, TypeError):
+                    ano_cit = None
+                for r in referencias:
+                    if not sigla_re.search(r.texto):
+                        continue
+                    try:
+                        ano_ref = int(r.ano[:4])
+                    except (ValueError, TypeError, AttributeError):
+                        ano_ref = None
+                    ano_ok = (r.ano == c.ano or
+                              (ano_cit is not None and ano_ref is not None
+                               and abs(ano_cit - ano_ref) <= 1))
+                    if ano_ok:
+                        for s in r.sobrenomes:
+                            chaves_citadas.add(f"{s.upper()}_{r.ano}")
+                        par_id = id(r)
+                        if par_id not in ja_pareados:
+                            ja_pareados.add(par_id)
+                            pareamentos.append((c, r))
+                            _log(f"    [SIGLA-MATCH] {c.texto} ↔ {r.texto[:80]}")
+                        encontrou = True
+                        break
 
         if not encontrou:
             citadas_sem_ref.append(c)
@@ -743,6 +781,18 @@ NORMAS ABNT PARA CITAÇÕES (NBR 10520:2023):
 - Citação direta: requer número de página — (SILVA, 2020, p. 45)
 - Compêndio/coletânea: autoria é do AUTOR DO CAPÍTULO, não do organizador
 - Apud: (AUTOR ORIGINAL apud AUTOR LIDO, ano) — use com moderação
+
+ATENÇÃO — TRATE FORMATAÇÃO E SEMÂNTICA COMO COISAS COMPLETAMENTE SEPARADAS:
+1. PROBLEMA DE FORMATAÇÃO (forma): a citação no texto não segue à risca o padrão
+   ABNT acima — ex.: vírgula em vez de ponto e vírgula entre autores, parênteses
+   faltando ou sobrando, espaçamento, "et al" sem ponto, ano colado ao sobrenome,
+   maiúsculas/minúsculas trocadas etc. Isso é só uma questão de FORMA.
+2. PROBLEMA SEMÂNTICO (conteúdo): o argumento atribuído ao autor não corresponde
+   ao que a obra realmente afirma — distorção de sentido, generalização indevida,
+   uso fora de contexto, inversão do argumento. Isso sim é DIVERGÊNCIA.
+REGRA DE OURO: um desvio de formatação NUNCA torna uma citação "INCORRETA" ou
+"PARCIAL" do ponto de vista do argumento. São defeitos de natureza diferente —
+relate-os em campos separados, sem deixar que um contamine o outro.
 """
 
 _PROMPT_CLAUDE = """Você é um verificador de integridade acadêmica especializado em normas ABNT.
@@ -764,7 +814,7 @@ Analise com base no documento anexado:
 4. Se for capítulo de compêndio: localize o capítulo do autor citado dentro do livro e verifique se o argumento corresponde ao que aquele capítulo afirma.
 
 Responda SOMENTE com JSON (sem markdown):
-{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
+{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases sobre a fidelidade do argumento à obra", "trecho_fonte": "trecho literal da obra até 200 chars", "formato_abnt": {{"conforme": true|false, "observacao": "se não conforme, descreva o desvio em <=1 frase; se conforme, string vazia"}}}}
 """
 
 _PROMPT_CLAUDE_TEXTO = """Você é um verificador de integridade acadêmica especializado em normas ABNT.
@@ -788,7 +838,7 @@ Analise com base no conteúdo acima:
 4. Se for capítulo de compêndio: localize o capítulo do autor citado e verifique se o argumento corresponde ao que aquele capítulo afirma.
 
 Responda SOMENTE com JSON (sem markdown):
-{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases explicando", "trecho_fonte": "trecho literal da obra até 200 chars"}}
+{{"veredicto": "CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE", "justificativa": "1-2 frases sobre a fidelidade do argumento à obra", "trecho_fonte": "trecho literal da obra até 200 chars", "formato_abnt": {{"conforme": true|false, "observacao": "se não conforme, descreva o desvio em <=1 frase; se conforme, string vazia"}}}}
 """
 
 _LIMITE_TEXTO_SEMANTICA  = 30_000   # janela para 1 citação
@@ -829,10 +879,19 @@ def verificar_grupo_claude(grupo: list, arquivo: str,
         return "\n\n".join(linhas)
 
     instrucao_final = (
-        "Para cada citação verifique: o argumento da dissertação é coerente com a obra?\n"
+        "Para cada citação avalie DUAS coisas, de forma independente:\n"
+        "  (a) SEMÂNTICA — o argumento da dissertação é coerente com o que a obra "
+        "realmente afirma? (define o campo \"veredicto\")\n"
+        "  (b) FORMATAÇÃO — a citação no texto segue o padrão ABNT descrito acima? "
+        "(define o campo \"formato_abnt\", à parte)\n"
+        "NÃO deixe desvios de formatação influenciarem o veredicto semântico — "
+        "uma citação fora do padrão ABNT mas com argumento fiel à obra é CORRETA.\n"
         "Responda SOMENTE com array JSON (sem markdown), um objeto por citação, na mesma ordem:\n"
         '[{"idx":1,"veredicto":"CORRETO"|"INCORRETO"|"PARCIAL"|"SEM_FONTE",'
-        '"justificativa":"1 frase","trecho_fonte":"trecho literal ≤150 chars"},...]'
+        '"justificativa":"1 frase sobre a fidelidade do argumento à obra",'
+        '"trecho_fonte":"trecho literal ≤150 chars",'
+        '"formato_abnt":{"conforme":true|false,'
+        '"observacao":"se não conforme, descreva o desvio em ≤1 frase; se conforme, string vazia"}},...]'
     )
 
     def _chamar_api(sub, content):
@@ -858,10 +917,14 @@ def verificar_grupo_claude(grupo: list, arquivo: str,
         parsed = sorted(parsed, key=lambda x: x.get("idx", 999)) if isinstance(parsed, list) else []
         while len(parsed) < len(sub):
             parsed.append({"veredicto": "ERRO", "justificativa": "Resposta incompleta da IA", "trecho_fonte": ""})
+        for p in parsed:
+            if not isinstance(p.get("formato_abnt"), dict):
+                p["formato_abnt"] = {"conforme": True, "observacao": ""}
         return parsed[:len(sub)]
 
     def _erro_lista(sub, msg):
-        return [{"veredicto": "ERRO", "justificativa": msg[:150], "trecho_fonte": ""} for _ in sub]
+        return [{"veredicto": "ERRO", "justificativa": msg[:150], "trecho_fonte": "",
+                 "formato_abnt": {"conforme": True, "observacao": ""}} for _ in sub]
 
     resultados = []
     # Divide em lotes de MAX_CITS_POR_CHAMADA
@@ -1110,6 +1173,11 @@ def gerar_html(resultado: dict) -> str:
     sem_fonte  = [v for v in verifics if v.get("veredicto") == "SEM_FONTE"]
     sugs_com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
 
+    # Desvios de FORMATAÇÃO ABNT — independentes do veredicto semântico acima;
+    # uma citação pode estar "CORRETA" no argumento e ainda assim fora do padrão ABNT.
+    desvios_formato = [v for v in verifics
+                       if not v.get("formato_abnt", {}).get("conforme", True)]
+
     def e(s):
         return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -1118,6 +1186,13 @@ def gerar_html(resultado: dict) -> str:
             return ""
         rows = "".join(f"<li>{fn(i)}</li>" for i in items)
         return f'<h2 style="color:{cor}">{e(titulo)} ({len(items)})</h2><ul>{rows}</ul>'
+
+    def card_formato(v):
+        obs = v.get("formato_abnt", {}).get("observacao", "")
+        return (f'<b>{e(v["citacao"])}</b>'
+                f'<br><small>Desvio identificado: {e(obs) if obs else "—"}</small>'
+                f'<details><summary><small>ver contexto</small></summary>'
+                f'<small>{e(v.get("contexto","")[:300])}</small></details>')
 
     def card(v):
         t = v.get("trecho_fonte", "")
@@ -1165,6 +1240,7 @@ small {{color:#555;font-size:.85em}}
   <div class="card" style="border-color:#27ae60"><b>{len(corretas)}</b>Verificadas<br>OK</div>
   <div class="card" style="border-color:#f39c12"><b>{len(parciais)}</b>Parciais</div>
   <div class="card" style="border-color:#e74c3c"><b>{len(incorretas)}</b>Incorretas</div>
+  <div class="card" style="border-color:#8e7c20"><b>{len(desvios_formato)}</b>Desvios de<br>formatação ABNT</div>
   <div class="card" style="border-color:#f0c040"><b>{len(sugs_com_match)}</b>Obras<br>sugeridas</div>
 </div>
 """
@@ -1178,13 +1254,22 @@ small {{color:#555;font-size:.85em}}
         lambda r: f'<span class="warn">{e(r.texto[:250])}</span>')
 
     if incorretas:
-        html += secao("✗ INCORRETAS — argumento diverge da obra", incorretas, "#c0392b", card)
+        html += secao("✗ INCORRETAS — argumento diverge da obra (problema SEMÂNTICO)", incorretas, "#c0392b", card)
     if parciais:
-        html += secao("~ PARCIAIS — citação com ressalvas", parciais, "#d35400", card)
+        html += secao("~ PARCIAIS — citação com ressalvas no argumento (problema SEMÂNTICO)", parciais, "#d35400", card)
     if corretas:
-        html += secao("✓ CORRETAS — confirmadas pela obra", corretas, "#27ae60", card)
+        html += secao("✓ CORRETAS — argumento confirmado pela obra", corretas, "#27ae60", card)
     if sem_fonte:
         html += secao("? SEM FONTE — arquivo não encontrado na pasta", sem_fonte, "#7f8c8d", card)
+
+    if desvios_formato:
+        html += secao(
+            "📐 DESVIOS DE FORMATAÇÃO ABNT — problema de FORMA, não de conteúdo",
+            desvios_formato, "#8e7c20", card_formato)
+        html += ('<p><em>As citações abaixo não seguem rigorosamente o padrão ABNT '
+                 '(ex.: pontuação, parênteses, espaçamento), mas isso NÃO significa '
+                 'que o argumento esteja incorreto — a fidelidade ao conteúdo da obra '
+                 'é avaliada separadamente, nas seções de divergência semântica acima.</em></p>')
 
     if sugestoes:
         com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
@@ -1240,7 +1325,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2025-06-02-v8.6")
+    L("VERSÃO: 2026-06-07-v8.9")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1401,6 +1486,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                     "arquivo_fonte": "", "veredicto": "SEM_FONTE",
                     "justificativa": f"Arquivo de {ref_sob} ({ref_ano}) não encontrado na pasta",
                     "trecho_fonte": "",
+                    "formato_abnt": {"conforme": True, "observacao": ""},
                 })
 
             # ── Agrupa citações por arquivo fonte ─────────────────────────
