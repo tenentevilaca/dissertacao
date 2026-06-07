@@ -79,6 +79,21 @@ def ler_pdf(caminho: Path) -> str:
         return f"[ERRO ao ler PDF: {e}]"
 
 
+def ler_pdf_paginas(caminho: Path) -> list:
+    """Retorna o texto de cada página separadamente — [texto_pag_1, texto_pag_2, ...].
+
+    Diferente de ler_pdf(), preserva a fronteira de cada página para permitir
+    apontar o número exato onde um trecho aparece (PDF tem paginação fixa
+    gravada no arquivo; .docx não — por isso essa função existe só para PDF).
+    """
+    try:
+        import fitz
+        doc = fitz.open(str(caminho))
+        return [page.get_text() for page in doc]
+    except Exception:
+        return []
+
+
 def ler_arquivo(caminho: Path) -> str:
     ext = caminho.suffix.lower()
     if ext in (".docx", ".doc"):
@@ -1002,10 +1017,26 @@ _MAX_CANDIDATOS_SUGESTAO = 5
 _JANELA_CANDIDATO        = 8_000   # chars por candidato enviados ao Claude
 
 
-def _candidatos_por_relevancia(contexto: str, material: dict,
+def _melhor_pagina(palavras: list, paginas: list) -> Optional[int]:
+    """Retorna o número (1-based) da página de `paginas` com mais palavras-chave
+    em comum com `palavras`, ou None se nenhuma página tiver correspondência.
+    Só faz sentido para PDF — único formato com paginação fixa gravada no arquivo."""
+    melhor_idx, melhor_sc = None, 0
+    for i, txt in enumerate(paginas):
+        tl = txt.lower()
+        sc = sum(1 for w in palavras if w in tl)
+        if sc > melhor_sc:
+            melhor_idx, melhor_sc = i, sc
+    return (melhor_idx + 1) if melhor_idx is not None else None
+
+
+def _candidatos_por_relevancia(contexto: str, material: dict, material_paginas: dict = None,
                                 top_n: int = _MAX_CANDIDATOS_SUGESTAO) -> list:
-    """Retorna [(nome_arquivo, trecho_relevante)] para os top_n arquivos mais
-    relevantes para o contexto da citação, baseado em sobreposição de keywords."""
+    """Retorna [(nome_arquivo, pagina_ou_None, trecho_relevante)] para os top_n
+    arquivos mais relevantes para o contexto da citação, com base em
+    sobreposição de keywords. `pagina` só é preenchida para PDFs (únicos com
+    paginação fixa gravada no arquivo — .docx não tem como apontar página real)."""
+    material_paginas = material_paginas or {}
     palavras = [p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", contexto.lower())
                 if p not in _STOPWORDS]
     if not palavras:
@@ -1018,13 +1049,20 @@ def _candidatos_por_relevancia(contexto: str, material: dict,
         trecho = _trecho_relevante(contexto, texto, janela=_JANELA_CANDIDATO)
         sc = sum(1 for w in palavras if w in trecho.lower())
         if sc > 0:
-            scored.append((sc, nome, trecho))
+            paginas = material_paginas.get(nome)
+            pagina = _melhor_pagina(palavras, paginas) if paginas else None
+            # Quando há página, restringe o trecho enviado ao texto dessa
+            # página específica — garante que o que o Claude vê (e cita)
+            # corresponde exatamente à página apontada.
+            if pagina is not None:
+                trecho = paginas[pagina - 1][:_JANELA_CANDIDATO]
+            scored.append((sc, nome, pagina, trecho))
 
     scored.sort(key=lambda x: -x[0])
-    return [(nome, trecho) for _, nome, trecho in scored[:top_n]]
+    return [(nome, pagina, trecho) for _, nome, pagina, trecho in scored[:top_n]]
 
 
-def sugerir_obras_alternativas(cit: Citacao, material: dict,
+def sugerir_obras_alternativas(cit: Citacao, material: dict, material_paginas: dict,
                                 api_key: str, log_fn=None) -> dict:
     """
     Para uma citação sem fonte encontrada, busca entre todos os arquivos
@@ -1035,17 +1073,28 @@ def sugerir_obras_alternativas(cit: Citacao, material: dict,
         if log_fn:
             log_fn(msg)
 
-    candidatos = _candidatos_por_relevancia(cit.contexto, material)
+    candidatos = _candidatos_por_relevancia(cit.contexto, material, material_paginas)
     if not candidatos:
         return {"encontrou": False, "sugestoes": [], "nota": "Nenhum candidato encontrado"}
+
+    # Mapas auxiliares para validar a página devolvida pelo Claude — nunca
+    # confiamos cegamente: para um trabalho científico, a página apontada
+    # precisa ser real e conferível, não estimada.
+    pagina_por_obra = {nome: pagina for nome, pagina, _ in candidatos}
+    texto_pagina_por_obra = {
+        nome: material_paginas[nome][pagina - 1]
+        for nome, pagina, _ in candidatos
+        if pagina is not None and nome in material_paginas
+    }
 
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key, max_retries=5)
 
         blocos_obras = ""
-        for i, (nome, trecho) in enumerate(candidatos, 1):
-            blocos_obras += f"\n\n=== OBRA {i}: {nome} ===\n{trecho}"
+        for i, (nome, pagina, trecho) in enumerate(candidatos, 1):
+            cabecalho = f"=== OBRA {i}: {nome}" + (f" — PÁGINA {pagina}" if pagina else "") + " ==="
+            blocos_obras += f"\n\n{cabecalho}\n{trecho}"
 
         prompt = (
             "Você é um especialista em integridade acadêmica. "
@@ -1056,17 +1105,30 @@ def sugerir_obras_alternativas(cit: Citacao, material: dict,
             "Verifique se alguma dessas obras contém um argumento ou dado que "
             "poderia validar o que foi afirmado na citação:\n"
             f"{blocos_obras}\n\n"
+            "REGRA SOBRE PÁGINA — leia com atenção, isto é um trabalho científico "
+            "e a página precisa ser EXATA e conferível, nunca estimada:\n"
+            "- Alguns cabeçalhos de obra trazem '— PÁGINA N' (obtido diretamente da "
+            "paginação real do arquivo PDF). Se o trecho que sustenta o argumento "
+            "vier de um bloco com esse cabeçalho, copie esse N exatamente em "
+            "\"pagina\".\n"
+            "- Se o cabeçalho NÃO trouxer página (arquivo .docx/.doc, que não tem "
+            "paginação fixa gravada no documento), retorne \"pagina\": null. "
+            "NUNCA estime, calcule ou invente um número de página nesse caso.\n\n"
             "Responda SOMENTE com JSON (sem markdown):\n"
             '{"encontrou": true|false, '
             '"sugestoes": [{"obra": "nome_do_arquivo", '
+            '"pagina": <número inteiro da página indicada no cabeçalho do bloco usado, ou null>, '
             '"trecho": "trecho literal ≤200 chars que suporta o argumento", '
             '"citacao_sugerida": "como citar em ABNT ex: SOBRENOME (ANO) ou (SOBRENOME, ANO)", '
+            '"referencia_completa": "referência bibliográfica completa em ABNT da obra, '
+            'montada a partir das informações disponíveis no trecho/obra (autor, título, '
+            'local, editora, ano); se faltar algum dado, omita-o — não invente", '
             '"justificativa": "1 frase explicando por que essa obra valida o argumento"}]}'
         )
 
         resp = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1024,
+            max_tokens=1536,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = re.sub(r"^```(?:json)?", "", resp.content[0].text.strip()).strip("`").strip()
@@ -1078,6 +1140,28 @@ def sugerir_obras_alternativas(cit: Citacao, material: dict,
 
         parsed.setdefault("encontrou", False)
         parsed.setdefault("sugestoes", [])
+
+        # Validação defensiva da página — nunca exibimos um número não conferível:
+        # 1) se a obra não tem paginação real disponível (não-PDF), zera;
+        # 2) se tem, exige que o trecho citado realmente apareça naquela página
+        #    específica do arquivo — caso contrário, a página é descartada.
+        _norm = lambda s: re.sub(r"\s+", " ", (s or "")).strip().lower()
+        for sg in parsed["sugestoes"]:
+            sg.setdefault("pagina", None)
+            sg.setdefault("referencia_completa", "")
+            nome = sg.get("obra", "")
+            pagina = sg.get("pagina")
+            if pagina is None:
+                continue
+            if pagina_por_obra.get(nome) != pagina:
+                sg["pagina"] = None
+                continue
+            txt_pag = _norm(texto_pagina_por_obra.get(nome, ""))
+            trecho_norm = _norm(sg.get("trecho", ""))[:80]
+            if not trecho_norm or trecho_norm not in txt_pag:
+                _log(f"         ⚠ Página {pagina} de {nome} não confirma o trecho citado — descartando número de página")
+                sg["pagina"] = None
+
         return parsed
 
     except Exception as exc:
@@ -1299,10 +1383,22 @@ small {{color:#555;font-size:.85em}}
                 html += f'<b>Citação original:</b> {e(s["citacao"])}<br>'
                 html += f'<small style="color:#555">{e(s["contexto"][:300])}</small><br><br>'
                 for sg in s["sugestoes"]:
+                    pagina = sg.get("pagina")
+                    if pagina:
+                        pag_html = f'<b>Página:</b> {e(str(pagina))} <small style="color:#888">(localização exata, extraída do PDF — conferível)</small><br>'
+                    else:
+                        pag_html = ('<b>Página:</b> <small style="color:#888">não disponível — '
+                                    'arquivo sem paginação fixa gravada (.docx) ou trecho não confirmado '
+                                    'na página apontada; não estimamos números de página</small><br>')
+                    ref_completa = sg.get("referencia_completa", "")
+                    ref_html = (f'<b>Referência completa (ABNT):</b> {e(ref_completa)}<br>'
+                                if ref_completa else "")
                     html += (
                         f'<div class="sug-obra">'
-                        f'<b>Obra encontrada:</b> {e(sg.get("obra", "?"))}<br>'
+                        f'<b>Arquivo:</b> {e(sg.get("obra", "?"))}<br>'
+                        f'{pag_html}'
                         f'<b>Citação sugerida:</b> <span class="sug-citacao">{e(sg.get("citacao_sugerida", "?"))}</span><br>'
+                        f'{ref_html}'
                         f'<b>Justificativa:</b> {e(sg.get("justificativa", ""))}<br>'
                     )
                     if sg.get("trecho"):
@@ -1342,7 +1438,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.11")
+    L("VERSÃO: 2026-06-07-v8.12")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1391,8 +1487,11 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
     L(f"  {len(arquivos)} arquivo(s) encontrado(s) na pasta")
     L("")
 
-    material       = {}   # nome → texto extraído  (para matching por conteúdo)
-    material_paths = {}   # nome → Path            (para envio nativo ao Claude)
+    material         = {}   # nome → texto extraído  (para matching por conteúdo)
+    material_paths   = {}   # nome → Path            (para envio nativo ao Claude)
+    material_paginas = {}   # nome → [texto_pág_1, texto_pág_2, ...]  (só PDF — única
+                            # fonte com paginação fixa gravada no arquivo; permite
+                            # apontar o número exato da página de um trecho sugerido)
     pdf_sem_texto  = 0
     for i, arq in enumerate(arquivos, 1):
         if stop_fn and stop_fn():
@@ -1405,6 +1504,10 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         if ok_texto:
             material[arq.name]       = t
             material_paths[arq.name] = arq
+            if is_pdf:
+                paginas = ler_pdf_paginas(arq)
+                if paginas:
+                    material_paginas[arq.name] = paginas
             tipo = "PDF" if is_pdf else arq.suffix.upper().lstrip(".")
             L(f"  [{i:>3}/{len(arquivos)}] ✓ {arq.name}  ({len(t):,} chars, {tipo})")
         elif is_pdf and arq.exists() and arq.stat().st_size > 0:
@@ -1600,10 +1703,11 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
                 contexto=cit_ctx,
                 paragrafo_idx=0,
             )
-            resultado_sug = sugerir_obras_alternativas(cit_obj, material_com_texto, api_key, L)
+            resultado_sug = sugerir_obras_alternativas(cit_obj, material_com_texto, material_paginas, api_key, L)
             if resultado_sug.get("encontrou") and resultado_sug.get("sugestoes"):
                 for s in resultado_sug["sugestoes"]:
-                    L(f"         ✔ Obra sugerida: {s.get('obra','?')} → {s.get('citacao_sugerida','?')}")
+                    pag_txt = f", p. {s['pagina']}" if s.get("pagina") else ""
+                    L(f"         ✔ Obra sugerida: {s.get('obra','?')}{pag_txt} → {s.get('citacao_sugerida','?')}")
             else:
                 L(f"         — Nenhuma obra de suporte encontrada")
             sugestoes_alternativas.append({
