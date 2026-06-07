@@ -1342,7 +1342,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.10")
+    L("VERSÃO: 2026-06-07-v8.11")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1378,8 +1378,14 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
     L("ETAPA 2 — Lendo arquivos de apoio (um a um)")
     L("=" * 65)
     extensoes = {".pdf", ".docx", ".doc", ".txt"}
+    try:
+        diss_resolvido = Path(diss_path).resolve()
+    except OSError:
+        diss_resolvido = None
     arquivos = sorted(
-        [f for f in Path(refs_dir).rglob("*") if f.is_file() and f.suffix.lower() in extensoes],
+        [f for f in Path(refs_dir).rglob("*")
+         if f.is_file() and f.suffix.lower() in extensoes
+         and (diss_resolvido is None or f.resolve() != diss_resolvido)],
         key=lambda f: f.name.lower()
     )
     L(f"  {len(arquivos)} arquivo(s) encontrado(s) na pasta")
