@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verificador de Citações Acadêmicas — Interface Streamlit (v8.6)
+Verificador de Citações Acadêmicas — Interface Streamlit (v8.7)
 """
 import io
 import os
@@ -16,12 +16,19 @@ from pathlib import Path
 
 import streamlit as st
 
-def _run_job(job_id: str, diss_path: str, refs_dir: str,
+# ── Caminho local para importar analisar.py ──────────────────────────────────
+_here = Path(__file__).parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
+
+def _run_job(job: dict, diss_path: str, refs_dir: str,
              api_key: str, sem_v: bool) -> None:
-    jobs = _get_jobs()
-    job = jobs.get(job_id)
-    if not job:
-        return
+    """
+    Roda em background thread.
+    `job` é o mesmo dict que está em st.session_state["job"] —
+    modificações aqui são visíveis no próximo rerun sem nenhum _JOBS global.
+    """
     job["status"] = "rodando"
 
     def _log(msg: str) -> None:
@@ -42,9 +49,6 @@ def _run_job(job_id: str, diss_path: str, refs_dir: str,
         job["status"] = "erro"
         job["error"] = traceback.format_exc()
 
-_here = Path(__file__).parent
-if str(_here) not in sys.path:
-    sys.path.insert(0, str(_here))
 
 # ── Página ──────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -78,43 +82,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ── Job store global ──────────────────────────────────────────────────────────
-# st.cache_resource cria o dict UMA SÓ VEZ por processo e nunca o reseta,
-# mesmo que st.rerun() re-execute o script inteiro do zero.
-@st.cache_resource
-def _get_jobs() -> dict:
-    return {}
-
-_JOBS: dict = _get_jobs()
-
-
-# ── Helpers para query_params (compatível com Streamlit >= 1.28) ──────────────
-def _qp_get(key: str, default: str = "") -> str:
-    try:
-        return st.query_params.get(key, default)
-    except AttributeError:
-        return st.experimental_get_query_params().get(key, [default])[0]
-
-def _qp_set(**kwargs) -> None:
-    try:
-        for k, v in kwargs.items():
-            st.query_params[k] = v
-    except AttributeError:
-        try:
-            st.experimental_set_query_params(**kwargs)
-        except Exception:
-            pass
-
-def _qp_clear() -> None:
-    try:
-        st.query_params.clear()
-    except AttributeError:
-        try:
-            st.experimental_set_query_params()
-        except Exception:
-            pass
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # CABEÇALHO
 # ════════════════════════════════════════════════════════════════════════════
@@ -125,30 +92,27 @@ st.markdown("""
     Lê a dissertação &nbsp;·&nbsp; Cruza referências &nbsp;·&nbsp;
     Verifica coerência com IA &nbsp;·&nbsp; Gera relatório
   </div>
-  <div class="hdr-badge">v8.6</div>
+  <div class="hdr-badge">v8.7</div>
 </div>
 """, unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # GESTÃO DE ARQUIVOS DE REFERÊNCIA — disco, não RAM
-# Os bytes ficam em /tmp; session_state só guarda metadados (nome → tamanho).
 # ════════════════════════════════════════════════════════════════════════════
 
 def _refs_dir() -> str:
-    """Retorna (e cria se necessário) o diretório de referências desta sessão."""
     if "refs_tmpdir" not in st.session_state:
         st.session_state["refs_tmpdir"] = tempfile.mkdtemp(
             prefix=f"cit_{uuid.uuid4().hex[:8]}_"
         )
-        st.session_state["refs_meta"] = {}  # nome → tamanho em bytes
+        st.session_state["refs_meta"] = {}
     return st.session_state["refs_tmpdir"]
 
 
 def _add_file(nome: str, data: bytes) -> None:
     d = _refs_dir()
-    dest = os.path.join(d, nome)
-    with open(dest, "wb") as f:
+    with open(os.path.join(d, nome), "wb") as f:
         f.write(data)
     st.session_state["refs_meta"][nome] = len(data)
 
@@ -164,7 +128,7 @@ def _del_file(nome: str) -> None:
 
 def _clear_files() -> None:
     meta = st.session_state.get("refs_meta", {})
-    d = st.session_state.get("refs_tmpdir", "")
+    d    = st.session_state.get("refs_tmpdir", "")
     for nome in list(meta):
         try:
             os.remove(os.path.join(d, nome))
@@ -173,12 +137,64 @@ def _clear_files() -> None:
     st.session_state["refs_meta"] = {}
 
 
-# Garante que os dicts existam mesmo antes de qualquer widget
+# Inicializa estruturas na primeira execução da sessão
 _refs_dir()
-if "resultado"    not in st.session_state:
-    st.session_state["resultado"]    = None
-if "analise_erro" not in st.session_state:
-    st.session_state["analise_erro"] = None
+if "resultado" not in st.session_state:
+    st.session_state["resultado"] = None
+if "job" not in st.session_state:
+    st.session_state["job"] = None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAINEL DE PROGRESSO — aparece no topo quando análise está rodando
+# ════════════════════════════════════════════════════════════════════════════
+_job = st.session_state.get("job")
+
+if _job is not None:
+    _status = _job["status"]
+    _logs   = _job.get("logs", [])
+
+    if _status in ("iniciando", "rodando"):
+        _etapa = next(
+            (l for l in reversed(_logs) if l.strip().startswith("ETAPA")),
+            "Aguardando início…",
+        )
+        st.info(
+            f"⏳ **{_etapa}**  \n"
+            "A análise roda em segundo plano. "
+            "Esta página atualiza a cada 3 s automaticamente.",
+            icon="🔄",
+        )
+        st.markdown(f"**📋 Log de progresso ({len(_logs)} linha(s)):**")
+        if _logs:
+            st.code("\n".join(_logs[-60:]), language="")
+        else:
+            st.caption("⏳ Iniciando análise… aguarde as primeiras mensagens.")
+
+        import time as _time
+        _time.sleep(3)
+        st.rerun()
+
+    elif _status == "concluido":
+        st.session_state["resultado"] = _job["resultado"]
+        st.session_state["job"] = None
+        st.rerun()
+
+    elif _status == "vazio":
+        st.warning(
+            "⚠️ A análise foi executada mas não retornou dados.  \n"
+            "Verifique se o DOCX contém citações no formato ABNT."
+        )
+        st.session_state["job"] = None
+
+    elif _status == "erro":
+        st.error("❌  **Erro durante a análise:**")
+        st.code(_job.get("error", ""), language="")
+        st.session_state["job"] = None
+
+    # Enquanto estiver rodando, não mostra o formulário abaixo
+    if _status in ("iniciando", "rodando"):
+        st.stop()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -316,7 +332,7 @@ with st.container(border=True):
             if novos:
                 st.success(f"✅ **{len(novos)} arquivo(s) novos** adicionados!")
 
-    # ── ABA UM POR VEZ ───────────────────────────────────────────────────────
+    # ── ABA UM POR VEZ ────────────────────────────────────────────────────────
     with aba_um:
         st.caption("Envie um arquivo por vez — útil quando os outros métodos não funcionam.")
         novo_arq = st.file_uploader(
@@ -328,8 +344,8 @@ with st.container(border=True):
         if novo_arq is not None:
             _add_file(novo_arq.name, novo_arq.getbuffer().tobytes())
 
-    # ── FILA (metadados apenas — bytes já estão no disco) ─────────────────────
-    meta = st.session_state["refs_meta"]
+    # ── LISTA DE ARQUIVOS ─────────────────────────────────────────────────────
+    meta    = st.session_state["refs_meta"]
     n_total = len(meta)
     mb_total = sum(meta.values()) / (1024 * 1024)
 
@@ -363,7 +379,7 @@ with st.container(border=True):
         unsafe_allow_html=True,
     )
     st.caption(
-        "Necessária para a verificação semântica — verifica se os argumentos "
+        "Necessária para verificação semântica — verifica se os argumentos "
         "citados batem com o que as obras dizem. "
         "Sem ela o sistema faz só o cruzamento."
     )
@@ -380,25 +396,14 @@ with st.container(border=True):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# RECUPERA JOB AO RECONECTAR (URL param sobrevive a desconexões)
-# ════════════════════════════════════════════════════════════════════════════
-if "job_id" not in st.session_state:
-    _jid_url = _qp_get("job")
-    if _jid_url and _jid_url in _JOBS:
-        st.session_state["job_id"] = _jid_url
-
-
-# ════════════════════════════════════════════════════════════════════════════
 # BOTÃO INICIAR
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown("<br>", unsafe_allow_html=True)
 
-_job_ativo = st.session_state.get("job_id", "") in _JOBS
 rodar = st.button(
     "▶  Iniciar análise",
     type="primary",
     use_container_width=True,
-    disabled=_job_ativo,
 )
 
 if rodar:
@@ -412,7 +417,7 @@ if rodar:
         st.stop()
 
     try:
-        import analisar  # noqa: F401 — valida disponibilidade
+        import analisar  # noqa: F401
     except ImportError:
         st.error("❌  analisar.py não encontrado. Contate o suporte.")
         st.stop()
@@ -426,82 +431,27 @@ if rodar:
         st.error("❌  Nenhum arquivo de referência encontrado.")
         st.stop()
 
-    # Salva dissertação no mesmo diretório persistente das referências
     diss_path = os.path.join(refs_dir, "_dissertacao.docx")
     with open(diss_path, "wb") as fh:
         fh.write(docx_file.getbuffer())
 
-    # Cria job e inicia thread de fundo
-    job_id = uuid.uuid4().hex[:14]
-    _JOBS[job_id] = {"status": "iniciando", "logs": [], "resultado": None, "error": None}
-    st.session_state["job_id"] = job_id
-    _qp_set(job=job_id)   # persiste na URL para reconexão
+    # Cria o dict de job e guarda no session_state.
+    # A thread recebe referência direta ao mesmo dict —
+    # modificações da thread são visíveis nos próximos reruns.
+    job = {"status": "iniciando", "logs": [], "resultado": None, "error": None}
+    st.session_state["job"] = job
 
     threading.Thread(
         target=_run_job,
-        args=(job_id, diss_path, refs_dir, api_key.strip(), sem_v),
+        args=(job, diss_path, refs_dir, api_key.strip(), sem_v),
         daemon=True,
     ).start()
-    st.rerun()  # transição imediata para o painel de progresso
+
+    st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAINEL DE PROGRESSO (polling automático a cada 3 s)
-# ════════════════════════════════════════════════════════════════════════════
-_job_id = st.session_state.get("job_id", "")
-_job    = _JOBS.get(_job_id)
-
-if _job:
-    _status = _job["status"]
-    _logs   = _job.get("logs", [])
-
-    if _status in ("iniciando", "rodando"):
-        _etapa = next(
-            (l for l in reversed(_logs) if l.strip().startswith("ETAPA")),
-            "Aguardando início…",
-        )
-        st.info(
-            f"⏳ **{_etapa}**  \n"
-            "A análise continua em segundo plano. "
-            "Página atualiza automaticamente a cada 3 s.",
-            icon="🔄",
-        )
-        st.markdown(f"**📋 Log de progresso ({len(_logs)} linha(s)):**")
-        if _logs:
-            st.code("\n".join(_logs[-60:]), language="")
-        else:
-            st.caption("⏳ Iniciando análise… aguarde as primeiras mensagens.")
-
-        import time as _time
-        _time.sleep(3)
-        st.rerun()
-
-    elif _status == "concluido":
-        st.session_state["resultado"] = _job["resultado"]
-        del _JOBS[_job_id]
-        st.session_state.pop("job_id", None)
-        _qp_clear()
-        st.rerun()
-
-    elif _status == "vazio":
-        st.warning(
-            "⚠️ A análise foi executada mas não retornou dados.  \n"
-            "Verifique se o DOCX contém citações no formato ABNT."
-        )
-        del _JOBS[_job_id]
-        st.session_state.pop("job_id", None)
-        _qp_clear()
-
-    elif _status == "erro":
-        st.error("❌  **Erro durante a análise:**")
-        st.code(_job.get("error", ""), language="")
-        del _JOBS[_job_id]
-        st.session_state.pop("job_id", None)
-        _qp_clear()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# EXIBE RESULTADO (persiste em session_state entre re-runs)
+# EXIBE RESULTADO
 # ════════════════════════════════════════════════════════════════════════════
 resultado = st.session_state.get("resultado")
 if resultado:
@@ -573,7 +523,7 @@ if resultado:
             )
 
 st.markdown(
-    '<div class="rodape">Verificador de Citações Acadêmicas v8.6 · '
+    '<div class="rodape">Verificador de Citações Acadêmicas v8.7 · '
     'Desenvolvido com Claude API</div>',
     unsafe_allow_html=True,
 )
