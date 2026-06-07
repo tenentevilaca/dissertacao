@@ -16,15 +16,10 @@ from pathlib import Path
 
 import streamlit as st
 
-# ── Job store em nível de processo ────────────────────────────────────────────
-# Sobrevive a reconexões do WebSocket. A análise continua em segundo plano
-# mesmo que o navegador minimize ou desconecte.
-_JOBS: dict = {}   # job_id → {"status", "logs", "resultado", "error"}
-
-
 def _run_job(job_id: str, diss_path: str, refs_dir: str,
              api_key: str, sem_v: bool) -> None:
-    job = _JOBS.get(job_id)
+    jobs = _get_jobs()
+    job = jobs.get(job_id)
     if not job:
         return
     job["status"] = "rodando"
@@ -81,6 +76,16 @@ st.markdown("""
             padding-top: 1em; border-top: 1px solid #ddd; }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ── Job store global ──────────────────────────────────────────────────────────
+# st.cache_resource cria o dict UMA SÓ VEZ por processo e nunca o reseta,
+# mesmo que st.rerun() re-execute o script inteiro do zero.
+@st.cache_resource
+def _get_jobs() -> dict:
+    return {}
+
+_JOBS: dict = _get_jobs()
 
 
 # ── Helpers para query_params (compatível com Streamlit >= 1.28) ──────────────
