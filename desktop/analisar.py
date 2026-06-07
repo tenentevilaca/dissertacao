@@ -1271,7 +1271,17 @@ def gerar_html(resultado: dict) -> str:
     corretas   = [v for v in verifics if v.get("veredicto") == "CORRETO"]
     incorretas = [v for v in verifics if v.get("veredicto") == "INCORRETO"]
     parciais   = [v for v in verifics if v.get("veredicto") == "PARCIAL"]
-    sem_fonte  = [v for v in verifics if v.get("veredicto") == "SEM_FONTE"]
+    # "SEM_FONTE" cobre DUAS situações distintas que não podem ser misturadas
+    # sob o mesmo rótulo — uma diz que não há arquivo, a outra que HÁ arquivo
+    # mas seu conteúdo não confirma a citação (a IA já indica a referência e
+    # o arquivo encontrado, então rotular como "arquivo não encontrado" é
+    # contraditório e confunde o usuário):
+    #   (a) arquivo_fonte vazio  → a obra citada não está na pasta de apoio
+    #   (b) arquivo_fonte preenchido → obra localizada, mas seu conteúdo (na
+    #       avaliação da IA) não sustenta o argumento da citação
+    sem_fonte_total = [v for v in verifics if v.get("veredicto") == "SEM_FONTE"]
+    sem_arquivo     = [v for v in sem_fonte_total if not v.get("arquivo_fonte")]
+    sem_conteudo    = [v for v in sem_fonte_total if v.get("arquivo_fonte")]
     sugs_com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
 
     # Desvios de FORMATAÇÃO ABNT — independentes do veredicto semântico acima;
@@ -1360,8 +1370,17 @@ small {{color:#555;font-size:.85em}}
         html += secao("~ PARCIAIS — citação com ressalvas no argumento (problema SEMÂNTICO)", parciais, "#d35400", card)
     if corretas:
         html += secao("✓ CORRETAS — argumento confirmado pela obra", corretas, "#27ae60", card)
-    if sem_fonte:
-        html += secao("? SEM FONTE — arquivo não encontrado na pasta", sem_fonte, "#7f8c8d", card)
+    if sem_arquivo:
+        html += secao("? ARQUIVO NÃO LOCALIZADO — a obra citada não está na pasta de apoio",
+                      sem_arquivo, "#7f8c8d", card)
+    if sem_conteudo:
+        html += secao("⚠ ARGUMENTO NÃO CONFIRMADO NA OBRA — arquivo localizado, "
+                      "mas seu conteúdo não sustenta a citação (problema SEMÂNTICO)",
+                      sem_conteudo, "#a04000", card)
+        html += ('<p><em>A obra referenciada foi encontrada na pasta de apoio, mas a IA '
+                 'não localizou nela o argumento ou dado citado na dissertação. Veja '
+                 'mais abaixo, em "OBRAS SUGERIDAS", se uma fonte alternativa que '
+                 'sustenta o mesmo argumento foi localizada.</em></p>')
 
     if desvios_formato:
         html += secao(
@@ -1372,15 +1391,37 @@ small {{color:#555;font-size:.85em}}
                  'que o argumento esteja incorreto — a fidelidade ao conteúdo da obra '
                  'é avaliada separadamente, nas seções de divergência semântica acima.</em></p>')
 
+    _MOTIVO_SUGESTAO = {
+        "INCORRETO": "O argumento diverge do que a obra citada realmente afirma.",
+        "PARCIAL":   "O argumento só é parcialmente sustentado pela obra citada.",
+        "SEM_FONTE": ("A obra citada não foi localizada na pasta de apoio."),
+    }
+
+    def _motivo_sugestao(s):
+        origem = s.get("veredicto_origem", "")
+        if origem == "SEM_FONTE" and s.get("arquivo_origem"):
+            return ("O arquivo da obra citada foi localizado, mas seu conteúdo "
+                    "não confirma o argumento da citação.")
+        return _MOTIVO_SUGESTAO.get(origem, "")
+
     if sugestoes:
         com_match = [s for s in sugestoes if s.get("encontrou") and s.get("sugestoes")]
         sem_match = [s for s in sugestoes if not (s.get("encontrou") and s.get("sugestoes"))]
         if com_match:
-            html += f'<h2 style="color:#b8860b">💡 OBRAS SUGERIDAS — citações sem referência mas com suporte nas obras disponíveis ({len(com_match)})</h2>'
-            html += '<p><em>Para cada citação cujo autor não consta nas referências, foi encontrada uma obra disponível que suporta o mesmo argumento. Considere substituir a citação pelo trabalho indicado.</em></p><ul>'
+            html += f'<h2 style="color:#b8860b">💡 FONTES ALTERNATIVAS ENCONTRADAS — citações com argumento não confirmado pela obra citada, mas sustentado por outra obra disponível ({len(com_match)})</h2>'
+            html += ('<p><em>Nos casos abaixo, o argumento da dissertação não foi confirmado na obra '
+                     'indicada como referência (seja por divergência de conteúdo, seja por a obra não '
+                     'ter sido localizada), mas outra obra do material de apoio sustenta o mesmo argumento. '
+                     'Considere substituir a citação/referência pelo indicado.</em></p><ul>')
             for s in com_match:
+                motivo = _motivo_sugestao(s)
+                ref_origem = s.get("referencia_origem", "")
                 html += f'<li style="border-left:5px solid #f0c040;background:#fffdf0;padding:.7em 1em;margin:.5em 0;border-radius:0 6px 6px 0">'
                 html += f'<b>Citação original:</b> {e(s["citacao"])}<br>'
+                if ref_origem:
+                    html += f'<small><b>Referência atualmente indicada:</b> {e(ref_origem[:150])}</small><br>'
+                if motivo:
+                    html += f'<small style="color:#a04000"><b>Por que buscamos uma alternativa:</b> {e(motivo)}</small><br>'
                 html += f'<small style="color:#555">{e(s["contexto"][:300])}</small><br><br>'
                 for sg in s["sugestoes"]:
                     pagina = sg.get("pagina")
@@ -1438,7 +1479,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.12")
+    L("VERSÃO: 2026-06-07-v8.13")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
@@ -1671,30 +1712,39 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
     sugestoes_alternativas = []
     L("")
     L("=" * 65)
-    L("ETAPA 5 — Sugerindo obras alternativas para citações sem fonte")
+    L("ETAPA 5 — Buscando obras alternativas para citações com argumento não confirmado")
     L("=" * 65)
 
-    sem_fonte_verifs = [v for v in verificacoes
-                        if v.get("veredicto") == "SEM_FONTE" and not v.get("arquivo_fonte")]
+    # Busca uma fonte alternativa sempre que o argumento da citação NÃO esteja
+    # confirmado pela obra que ela referencia — seja porque (a) a referência
+    # não existe/o arquivo não foi localizado (SEM_FONTE sem arquivo_fonte),
+    # (b) o arquivo foi localizado mas seu conteúdo não confirma o argumento
+    # (SEM_FONTE com arquivo_fonte), ou (c) o argumento diverge do que a obra
+    # realmente afirma (INCORRETO/PARCIAL). Em todos esses casos, vale a pena
+    # apontar — se existir — uma obra do material de apoio que sustente o
+    # mesmo argumento, com página, citação e referência corretas para troca
+    # na dissertação.
+    candidatos_sugestao = [v for v in verificacoes
+                           if v.get("veredicto") in ("SEM_FONTE", "INCORRETO", "PARCIAL")]
     material_com_texto = {n: t for n, t in material.items() if t}
 
     if sem_verificacao or not api_key.strip():
         L("  [Etapa ignorada — verificação semântica desativada ou sem chave API]")
     elif not material_com_texto:
         L("  [Sem arquivos com texto extraído — não é possível busca semântica]")
-    elif not sem_fonte_verifs:
-        L("  ✓ Nenhuma citação sem fonte requer sugestão")
+    elif not candidatos_sugestao:
+        L("  ✓ Nenhuma citação com argumento não confirmado requer sugestão")
     else:
-        L(f"  → {len(sem_fonte_verifs)} citação(ões) sem fonte a analisar")
+        L(f"  → {len(candidatos_sugestao)} citação(ões) com argumento não confirmado a analisar")
         L(f"  → {len(material_com_texto)} obra(s) disponíveis para busca semântica")
         L("")
-        for i, v in enumerate(sem_fonte_verifs, 1):
+        for i, v in enumerate(candidatos_sugestao, 1):
             if stop_fn and stop_fn():
                 L("\n[INTERROMPIDO]")
                 break
             cit_txt = v["citacao"]
             cit_ctx = v["contexto"]
-            L(f"  [{i:>3}/{len(sem_fonte_verifs)}] {cit_txt[:70]}")
+            L(f"  [{i:>3}/{len(candidatos_sugestao)}] {cit_txt[:70]}  (veredicto: {v.get('veredicto')})")
             cit_obj = Citacao(
                 texto=cit_txt,
                 autores=v.get("autores", []),
@@ -1711,13 +1761,16 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
             else:
                 L(f"         — Nenhuma obra de suporte encontrada")
             sugestoes_alternativas.append({
-                "citacao":  cit_txt,
-                "contexto": cit_ctx,
-                "autores":  v.get("autores", []),
-                "ano":      v.get("ano", ""),
+                "citacao":          cit_txt,
+                "contexto":         cit_ctx,
+                "autores":          v.get("autores", []),
+                "ano":              v.get("ano", ""),
+                "veredicto_origem": v.get("veredicto", ""),
+                "referencia_origem": v.get("referencia", ""),
+                "arquivo_origem":   v.get("arquivo_fonte", ""),
                 **resultado_sug,
             })
-            if i < len(sem_fonte_verifs):
+            if i < len(candidatos_sugestao):
                 time.sleep(3)
 
     return {

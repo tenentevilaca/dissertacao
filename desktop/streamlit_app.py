@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verificador de Citações Acadêmicas — Interface Streamlit (v8.12)
+Verificador de Citações Acadêmicas — Interface Streamlit (v8.13)
 """
 import io
 import os
@@ -92,7 +92,7 @@ st.markdown("""
     Lê a dissertação &nbsp;·&nbsp; Cruza referências &nbsp;·&nbsp;
     Verifica coerência com IA &nbsp;·&nbsp; Gera relatório
   </div>
-  <div class="hdr-badge">v8.12</div>
+  <div class="hdr-badge">v8.13</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -555,7 +555,7 @@ if resultado:
             )
 
 st.markdown(
-    '<div class="rodape">Verificador de Citações Acadêmicas v8.12 · '
+    '<div class="rodape">Verificador de Citações Acadêmicas v8.13 · '
     'Desenvolvido com Claude API</div>',
     unsafe_allow_html=True,
 )
