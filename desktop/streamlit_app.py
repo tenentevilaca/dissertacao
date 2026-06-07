@@ -437,9 +437,7 @@ if rodar:
         args=(job_id, diss_path, refs_dir, api_key.strip(), sem_v),
         daemon=True,
     ).start()
-    # Não chama st.rerun() — deixa o script continuar naturalmente para que
-    # a URL (?job=<id>) seja enviada ao browser junto com a resposta atual.
-    # O JS timer abaixo fará o reload quando necessário.
+    st.rerun()  # transição imediata para o painel de progresso
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -459,25 +457,19 @@ if _job:
         )
         st.info(
             f"⏳ **{_etapa}**  \n"
-            "A análise continua mesmo se minimizar o app. "
-            "Página atualiza a cada 8 s automaticamente.",
+            "A análise continua em segundo plano. "
+            "Página atualiza automaticamente a cada 3 s.",
             icon="🔄",
         )
-        # Mostra log sempre — com conteúdo ou com mensagem de espera
         st.markdown(f"**📋 Log de progresso ({len(_logs)} linha(s)):**")
         if _logs:
             st.code("\n".join(_logs[-60:]), language="")
         else:
             st.caption("⏳ Iniciando análise… aguarde as primeiras mensagens.")
 
-        # Reload pelo lado do cliente — funciona mesmo com WebSocket fechado.
-        # Quando o browser voltar ao primeiro plano, o timer dispara e
-        # recarrega a página, que recupera o job pela URL (?job=<id>).
-        import streamlit.components.v1 as _sc
-        _sc.html(
-            "<script>setTimeout(()=>window.parent.location.reload(),8000)</script>",
-            height=0,
-        )
+        import time as _time
+        _time.sleep(3)
+        st.rerun()
 
     elif _status == "concluido":
         st.session_state["resultado"] = _job["resultado"]
