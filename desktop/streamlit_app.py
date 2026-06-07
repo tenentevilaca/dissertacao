@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Verificador de Citações Acadêmicas — Interface Streamlit (v8.7)
+Verificador de Citações Acadêmicas — Interface Streamlit (v8.8)
 """
 import io
 import os
@@ -26,8 +26,8 @@ def _run_job(job: dict, diss_path: str, refs_dir: str,
              api_key: str, sem_v: bool) -> None:
     """
     Roda em background thread.
-    `job` é o mesmo dict que está em st.session_state["job"] —
-    modificações aqui são visíveis no próximo rerun sem nenhum _JOBS global.
+    `job` é o mesmo dict guardado em st.session_state["job"].
+    Qualquer modificação aqui fica visível no próximo fragment/rerun.
     """
     job["status"] = "rodando"
 
@@ -92,7 +92,7 @@ st.markdown("""
     Lê a dissertação &nbsp;·&nbsp; Cruza referências &nbsp;·&nbsp;
     Verifica coerência com IA &nbsp;·&nbsp; Gera relatório
   </div>
-  <div class="hdr-badge">v8.7</div>
+  <div class="hdr-badge">v8.8</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -139,20 +139,29 @@ def _clear_files() -> None:
 
 # Inicializa estruturas na primeira execução da sessão
 _refs_dir()
-if "resultado" not in st.session_state:
-    st.session_state["resultado"] = None
-if "job" not in st.session_state:
-    st.session_state["job"] = None
+if "resultado"     not in st.session_state:
+    st.session_state["resultado"]     = None
+if "job"           not in st.session_state:
+    st.session_state["job"]           = None
+if "analise_erro"  not in st.session_state:
+    st.session_state["analise_erro"]  = None
+if "analise_aviso" not in st.session_state:
+    st.session_state["analise_aviso"] = None
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAINEL DE PROGRESSO — aparece no topo quando análise está rodando
+# PAINEL DE PROGRESSO  (st.fragment — atualiza a cada 2 s sem sleep/bloquear)
+# Isso resolve o "Connection error" em tablets: nenhum sleep no thread
+# principal, o WebSocket nunca fica ocioso durante a análise.
 # ════════════════════════════════════════════════════════════════════════════
-_job = st.session_state.get("job")
+@st.fragment(run_every=2)
+def _painel_progresso() -> None:
+    job = st.session_state.get("job")
+    if job is None:
+        return
 
-if _job is not None:
-    _status = _job["status"]
-    _logs   = _job.get("logs", [])
+    _status = job["status"]
+    _logs   = job.get("logs", [])
 
     if _status in ("iniciando", "rodando"):
         _etapa = next(
@@ -161,8 +170,8 @@ if _job is not None:
         )
         st.info(
             f"⏳ **{_etapa}**  \n"
-            "A análise roda em segundo plano. "
-            "Esta página atualiza a cada 3 s automaticamente.",
+            "A análise roda em segundo plano — pode minimizar o app. "
+            "Painel atualiza a cada 2 s.",
             icon="🔄",
         )
         st.markdown(f"**📋 Log de progresso ({len(_logs)} linha(s)):**")
@@ -170,31 +179,51 @@ if _job is not None:
             st.code("\n".join(_logs[-60:]), language="")
         else:
             st.caption("⏳ Iniciando análise… aguarde as primeiras mensagens.")
+        return  # fragment re-executa sozinho — sem sleep, sem rerun manual
 
-        import time as _time
-        _time.sleep(3)
-        st.rerun()
-
-    elif _status == "concluido":
-        st.session_state["resultado"] = _job["resultado"]
+    # Análise concluída: guarda resultado e aciona rerun completo
+    if _status == "concluido":
+        st.session_state["resultado"] = job["resultado"]
         st.session_state["job"] = None
         st.rerun()
 
     elif _status == "vazio":
-        st.warning(
-            "⚠️ A análise foi executada mas não retornou dados.  \n"
+        st.session_state["analise_aviso"] = (
+            "A análise foi executada mas não retornou dados.  \n"
             "Verifique se o DOCX contém citações no formato ABNT."
         )
         st.session_state["job"] = None
+        st.rerun()
 
     elif _status == "erro":
-        st.error("❌  **Erro durante a análise:**")
-        st.code(_job.get("error", ""), language="")
+        # Persiste o erro ANTES de limpar o job, para aparecer na página completa
+        st.session_state["analise_erro"] = job.get("error", "Erro desconhecido")
         st.session_state["job"] = None
+        st.rerun()
 
-    # Enquanto estiver rodando, não mostra o formulário abaixo
-    if _status in ("iniciando", "rodando"):
-        st.stop()
+
+_painel_progresso()
+
+# Enquanto análise roda, esconde o formulário abaixo
+if st.session_state.get("job") is not None:
+    st.stop()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MENSAGENS PERSISTENTES (erro ou aviso da última análise)
+# ════════════════════════════════════════════════════════════════════════════
+if st.session_state.get("analise_erro"):
+    st.error("❌  **Erro durante a análise:**")
+    st.code(st.session_state["analise_erro"], language="")
+    if st.button("🗑️  Fechar erro", key="btn_fechar_erro"):
+        st.session_state["analise_erro"] = None
+        st.rerun()
+
+if st.session_state.get("analise_aviso"):
+    st.warning(f"⚠️ {st.session_state['analise_aviso']}")
+    if st.button("🗑️  Fechar aviso", key="btn_fechar_aviso"):
+        st.session_state["analise_aviso"] = None
+        st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -345,8 +374,8 @@ with st.container(border=True):
             _add_file(novo_arq.name, novo_arq.getbuffer().tobytes())
 
     # ── LISTA DE ARQUIVOS ─────────────────────────────────────────────────────
-    meta    = st.session_state["refs_meta"]
-    n_total = len(meta)
+    meta     = st.session_state["refs_meta"]
+    n_total  = len(meta)
     mb_total = sum(meta.values()) / (1024 * 1024)
 
     st.markdown("---")
@@ -435,9 +464,12 @@ if rodar:
     with open(diss_path, "wb") as fh:
         fh.write(docx_file.getbuffer())
 
-    # Cria o dict de job e guarda no session_state.
-    # A thread recebe referência direta ao mesmo dict —
-    # modificações da thread são visíveis nos próximos reruns.
+    # Limpa mensagens anteriores
+    st.session_state["analise_erro"]  = None
+    st.session_state["analise_aviso"] = None
+
+    # Cria job e guarda no session_state.
+    # A thread recebe referência direta ao mesmo dict.
     job = {"status": "iniciando", "logs": [], "resultado": None, "error": None}
     st.session_state["job"] = job
 
@@ -523,7 +555,7 @@ if resultado:
             )
 
 st.markdown(
-    '<div class="rodape">Verificador de Citações Acadêmicas v8.7 · '
+    '<div class="rodape">Verificador de Citações Acadêmicas v8.8 · '
     'Desenvolvido com Claude API</div>',
     unsafe_allow_html=True,
 )
