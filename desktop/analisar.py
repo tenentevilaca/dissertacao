@@ -182,6 +182,28 @@ def _contexto(paragrafos: list, idx: int, janela: int = 300) -> str:
     return (antes[-janela:] + " " + paragrafos[idx] + " " + depois[:janela]).strip()
 
 
+def _trecho_em_torno(contexto: str, alvo: str, janela: int = 350) -> str:
+    """Recorta um trecho de `contexto` CENTRADO na ocorrência do texto da
+    própria citação (`alvo`), em vez de sempre exibir o início da janela
+    de contexto. Como `_contexto` inclui ~300 caracteres ANTES do parágrafo
+    da citação, um corte fixo no início do contexto frequentemente mostra
+    apenas o parágrafo ANTERIOR — fazendo parecer que a citação exibida
+    "pertence" a outro trecho/argumento, quando na verdade ela só aparece
+    mais adiante no mesmo contexto."""
+    pos = contexto.find(alvo)
+    if pos < 0:
+        return contexto[:janela]
+    centro = pos + len(alvo) // 2
+    inicio = max(0, centro - janela // 2)
+    fim = min(len(contexto), inicio + janela)
+    trecho = contexto[inicio:fim]
+    if inicio > 0:
+        trecho = "[...] " + trecho
+    if fim < len(contexto):
+        trecho = trecho + " [...]"
+    return trecho
+
+
 def _split_citacoes_combinadas(para: str) -> str:
     """
     Desdobra citações combinadas num mesmo parêntese em citações separadas.
@@ -427,6 +449,14 @@ def _fuzzy_sobrenome(a: str, b: str) -> bool:
     na, nb = _normalizar(a), _normalizar(b)
     if na == nb:
         return True
+    # Sufixos geracionais comuns em sobrenomes brasileiros (FILHO, JÚNIOR,
+    # NETO, SOBRINHO) são curtos e genéricos — tolerância a distância de
+    # edição os faz colidir com sobrenomes não relacionados por coincidência
+    # (ex.: "Fialho" ↔ "Filho", distância de edição = 1, mas são pessoas
+    # diferentes). Por isso só casam por igualdade exata.
+    _sufixos_genericos = {'filho', 'junior', 'jr', 'neto', 'sobrinho'}
+    if na in _sufixos_genericos or nb in _sufixos_genericos:
+        return False
     # Um é prefixo significativo do outro (FERREIRA ↔ FERREIR)
     curto, longo = (na, nb) if len(na) <= len(nb) else (nb, na)
     if len(curto) >= 5 and longo.startswith(curto):
@@ -509,6 +539,26 @@ def cruzar(citacoes: list, referencias: list, log_fn=None) -> dict:
                             break
                 except (ValueError, TypeError):
                     pass
+
+            # 3b) Referência sem data declarada ("s.d." — convenção ABNT para
+            #     obra sem ano identificável, ex.: "[S.l.: s.n.], [s.d.]"):
+            #     a referência não pode "discordar" de um ano específico citado
+            #     quando ela própria não declara nenhum — por isso casa pelo
+            #     sobrenome (exato ou aproximado), independentemente do ano da
+            #     citação. Evita falso-negativo "sem referência" em casos como
+            #     "Fialho (2019)" citado no texto vs. referência "FIALHO...
+            #     [s.d.]" na bibliografia (o ano só existe de um lado).
+            if not encontrou:
+                for r in referencias:
+                    if r.ano == "s.d." and (
+                        sob.upper() in (s.upper() for s in r.sobrenomes)
+                        or any(_fuzzy_sobrenome(sob, rs) for rs in r.sobrenomes)
+                    ):
+                        for s in r.sobrenomes:
+                            chaves_citadas.add(f"{s.upper()}_{r.ano}")
+                        pareamentos.append((c, r))
+                        encontrou = True
+                        break
 
             # 4) Sigla institucional: o "sobrenome" citado é uma sigla curta
             #    (ex.: OSCE, ONU, FBSP, OEA) que pode não abrir a entrada da
@@ -932,7 +982,7 @@ def verificar_grupo_claude(grupo: list, arquivo: str,
                 comp = f" [COMPÊNDIO — capítulo de {ref.sobrenome}]"
             linhas.append(
                 f"[{i}] CITAÇÃO: {cit.texto}\n"
-                f"    CONTEXTO: {cit.contexto[:350]}\n"
+                f"    CONTEXTO: {_trecho_em_torno(cit.contexto, cit.texto, 350)}\n"
                 f"    REFERÊNCIA: {ref_txt}{comp}"
             )
         return "\n\n".join(linhas)
@@ -1127,7 +1177,7 @@ def sugerir_obras_alternativas(cit: Citacao, material: dict, material_paginas: d
             "Você é um especialista em integridade acadêmica. "
             "Uma dissertação contém a seguinte citação cujo autor/obra NÃO consta nas referências:\n\n"
             f"CITAÇÃO: {cit.texto}\n"
-            f"CONTEXTO NA DISSERTAÇÃO: {cit.contexto[:400]}\n\n"
+            f"CONTEXTO NA DISSERTAÇÃO: {_trecho_em_torno(cit.contexto, cit.texto, 400)}\n\n"
             "Abaixo estão trechos de obras disponíveis na pasta de referências. "
             "Verifique se alguma dessas obras contém um argumento ou dado que "
             "poderia validar o que foi afirmado na citação:\n"
@@ -1224,7 +1274,7 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
             prompt_txt = _PROMPT_CLAUDE_TEXTO.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
-                contexto=cit.contexto[:1200],
+                contexto=_trecho_em_torno(cit.contexto, cit.texto, 1200),
                 referencia=ref.texto[:400],
                 arquivo=arquivo,
                 modo_leitura=modo,
@@ -1244,7 +1294,7 @@ def verificar_claude(cit: Citacao, ref: Referencia, arquivo: str,
             prompt_txt = _PROMPT_CLAUDE.format(
                 regras_abnt=_REGRAS_ABNT,
                 citacao=cit.texto,
-                contexto=cit.contexto[:1200],
+                contexto=_trecho_em_torno(cit.contexto, cit.texto, 1200),
                 referencia=ref.texto[:400],
                 arquivo=arquivo,
                 modo_leitura=modo,
@@ -1386,7 +1436,7 @@ small {{color:#555;font-size:.85em}}
     html += secao("⚠ Citações SEM referência na lista bibliográfica", citadas_sr, "#e74c3c",
         lambda c: (f'<b class="err">{e(c.texto)}</b>'
                    f'<details><summary><small>ver contexto</small></summary>'
-                   f'<small>{e(c.contexto[:350])}</small></details>'))
+                   f'<small>{e(_trecho_em_torno(c.contexto, c.texto, 350))}</small></details>'))
 
     html += secao("⚠ Referências listadas SEM citação no texto", refs_sc, "#e67e22",
         lambda r: f'<span class="warn">{e(r.texto[:250])}</span>')
@@ -1489,7 +1539,7 @@ small {{color:#555;font-size:.85em}}
             html += (f'<li class="info"><b>{e(c.texto)}</b>'
                      f'<br><small>Ref.: {e(r.texto[:180])}</small>'
                      f'<details><summary><small>ver contexto</small></summary>'
-                     f'<small>{e(c.contexto[:300])}</small></details></li>')
+                     f'<small>{e(_trecho_em_torno(c.contexto, c.texto, 300))}</small></details></li>')
         html += "</ul>"
 
     html += "</body></html>"
@@ -1506,7 +1556,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.15")
+    L("VERSÃO: 2026-06-07-v8.16")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
