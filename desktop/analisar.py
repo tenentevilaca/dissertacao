@@ -182,26 +182,55 @@ def _contexto(paragrafos: list, idx: int, janela: int = 300) -> str:
     return (antes[-janela:] + " " + paragrafos[idx] + " " + depois[:janela]).strip()
 
 
+_RE_FRONTEIRA_FRASE = re.compile(r'[.!?](?=\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ"“]|\s*$)')
+
+
 def _trecho_em_torno(contexto: str, alvo: str, janela: int = 350) -> str:
-    """Recorta um trecho de `contexto` CENTRADO na ocorrência do texto da
-    própria citação (`alvo`), em vez de sempre exibir o início da janela
-    de contexto. Como `_contexto` inclui ~300 caracteres ANTES do parágrafo
-    da citação, um corte fixo no início do contexto frequentemente mostra
-    apenas o parágrafo ANTERIOR — fazendo parecer que a citação exibida
-    "pertence" a outro trecho/argumento, quando na verdade ela só aparece
-    mais adiante no mesmo contexto."""
+    """Recorta um trecho de `contexto` delimitado pelas FRONTEIRAS DE FRASE
+    em torno da ocorrência da própria citação (`alvo`), em vez de um corte
+    fixo de caracteres.
+
+    Dois problemas resolvidos:
+    1) Como `_contexto` inclui ~300 caracteres ANTES do parágrafo da citação,
+       um corte fixo no INÍCIO do contexto frequentemente mostrava só o
+       parágrafo ANTERIOR — fazendo parecer que a citação "pertencia" a
+       outro trecho/argumento, quando na verdade só aparecia mais adiante.
+    2) Um corte fixo no FIM podia avançar para a frase/parágrafo SEGUINTE,
+       que discute outro raciocínio — apresentando como "contexto da
+       citação" um trecho sem nenhuma relação com o argumento que ela
+       sustenta.
+
+    Por isso o lado posterior NUNCA ultrapassa o fim da própria frase que
+    contém a citação (onde o argumento citado termina); o lado anterior
+    pode incluir frases-gancho prévias (até `janela` caracteres), mas
+    sempre encaixado em fronteiras de frase — nunca cortando uma oração
+    ao meio.
+    """
     pos = contexto.find(alvo)
     if pos < 0:
         return contexto[:janela]
-    centro = pos + len(alvo) // 2
-    inicio = max(0, centro - janela // 2)
-    fim = min(len(contexto), inicio + janela)
-    trecho = contexto[inicio:fim]
+    fim_alvo = pos + len(alvo)
+
+    # Lado posterior: vai só até o fim da frase que contém a citação —
+    # texto além disso pertence a outro raciocínio.
+    janela_pos = contexto[fim_alvo:fim_alvo + janela]
+    m_fim = _RE_FRONTEIRA_FRASE.search(janela_pos)
+    fim = fim_alvo + (m_fim.end() if m_fim else len(janela_pos))
+
+    # Lado anterior: até `janela` caracteres, encaixado na fronteira de
+    # frase mais próxima para preservar o "gancho" do argumento sem
+    # cortar uma oração ao meio.
+    inicio_bruto = max(0, pos - janela)
+    fronteiras_antes = list(_RE_FRONTEIRA_FRASE.finditer(contexto, inicio_bruto, pos))
+    inicio = fronteiras_antes[-1].end() if fronteiras_antes else inicio_bruto
+
+    trecho = contexto[inicio:fim].strip()
     if inicio > 0:
         trecho = "[...] " + trecho
     if fim < len(contexto):
         trecho = trecho + " [...]"
     return trecho
+
 
 
 def _split_citacoes_combinadas(para: str) -> str:
@@ -1556,7 +1585,7 @@ def analisar(diss_path: str, refs_dir: str, api_key: str, log_fn,
         log_fn(msg)
 
     L("=" * 65)
-    L("VERSÃO: 2026-06-07-v8.16")
+    L("VERSÃO: 2026-06-07-v8.17")
     L("ETAPA 1 — Lendo a dissertação")
     L("=" * 65)
     texto = ler_docx(Path(diss_path))
