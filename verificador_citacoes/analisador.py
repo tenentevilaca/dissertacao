@@ -332,28 +332,40 @@ EXTENSOES_APOIO = {".pdf", ".docx", ".doc", ".txt"}
 def extrair_material_de_zip(zip_path: Path, destino: Path) -> dict[str, str]:
     """
     Extrai um ZIP e lê todos os arquivos suportados.
+    Achata a estrutura de pastas e trunca nomes longos para evitar limite do Windows.
     Retorna dict nome_arquivo → texto.
     """
     destino.mkdir(parents=True, exist_ok=True)
 
-    # Ignora arquivos temporários do Office
+    material: dict[str, str] = {}
+
     with zipfile.ZipFile(str(zip_path)) as z:
         for info in z.infolist():
-            nome = Path(info.filename).name
-            if nome.startswith("~$") or info.is_dir():
+            nome_original = Path(info.filename).name
+            if nome_original.startswith("~$") or info.is_dir():
                 continue
             ext = Path(info.filename).suffix.lower()
-            if ext in EXTENSOES_APOIO:
-                z.extract(info, destino)
-
-    material: dict[str, str] = {}
-    for arq in destino.rglob("*"):
-        if arq.is_file() and arq.suffix.lower() in EXTENSOES_APOIO:
-            if arq.name.startswith("~$"):
+            if ext not in EXTENSOES_APOIO:
                 continue
-            texto = ler_arquivo(arq)
+
+            # Trunca nome para evitar MAX_PATH do Windows (260 chars)
+            stem = Path(nome_original).stem[:60]
+            nome_curto = stem + ext
+            destino_arq = destino / nome_curto
+
+            # Evita colisão de nomes
+            contador = 1
+            while destino_arq.exists():
+                destino_arq = destino / f"{stem}_{contador}{ext}"
+                contador += 1
+
+            # Extrai direto para o destino achato
+            with z.open(info) as src, open(destino_arq, "wb") as dst:
+                dst.write(src.read())
+
+            texto = ler_arquivo(destino_arq)
             if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
-                material[arq.name] = texto
+                material[nome_original[:80]] = texto  # usa nome original como chave (truncado)
 
     return material
 
