@@ -27,7 +27,19 @@ else:
 
 sys.path.insert(0, str(_BASE))
 
-app = FastAPI(title="Verificador de Citações Acadêmicas")
+app = FastAPI(title="Ferramentas Acadêmicas")
+
+# Limite de upload: 1 GB (suporte a pastas de material de apoio grandes)
+_1GB = 1_073_741_824
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import Headers
+
+class LargeUploadMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        request._max_content_size = _1GB
+        return await call_next(request)
+
+app.add_middleware(LargeUploadMiddleware)
 
 # ── Estado global dos jobs ──────────────────────────────────────────────
 _jobs: dict[str, dict] = {}   # job_id → {queue, tmpdir, status, relatorio_dir}
@@ -398,8 +410,15 @@ def _rodar_analise(
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "═" * 60)
-    print("  VERIFICADOR DE CITAÇÕES ACADÊMICAS — APP WEB")
+    print("  FERRAMENTAS ACADÊMICAS — APP WEB")
     print("  Acesse no navegador:  http://localhost:8000")
     print("  Na mesma rede/tablet: http://<SEU-IP>:8000")
     print("═" * 60 + "\n")
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        # Limite de corpo HTTP: 1 GB
+        h11_max_incomplete_event_size=1_073_741_824,
+    )
