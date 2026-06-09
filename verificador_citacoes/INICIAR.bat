@@ -1,5 +1,5 @@
 @echo off
-title Verificador de Citacoes Academicas
+title Ferramentas Academicas - Verificador e Analisador
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 

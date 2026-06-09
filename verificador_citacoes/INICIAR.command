@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 echo ""
 echo "  ====================================================="
-echo "   VERIFICADOR DE CITAÇÕES ACADÊMICAS"
+echo "   FERRAMENTAS ACADÊMICAS — Verificador + Analisador"
 echo "   Aguarde, inicializando..."
 echo "  ====================================================="
 echo ""

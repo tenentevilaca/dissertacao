@@ -29,7 +29,8 @@ sys.path.insert(0, str(BUNDLE_DIR))
 # ── Cabeçalho ────────────────────────────────────────────────────────────
 print("""
 ╔══════════════════════════════════════════════════════════╗
-║       VERIFICADOR DE CITAÇÕES ACADÊMICAS                ║
+║   FERRAMENTAS ACADÊMICAS                                ║
+║   Verificador de Citações + Analisador de Dissertação   ║
 ╚══════════════════════════════════════════════════════════╝
 """)
 
