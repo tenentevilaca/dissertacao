@@ -66,7 +66,11 @@ print("\nPressione Ctrl+C ou feche esta janela para encerrar.\n")
 
 try:
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=PORTA, log_level="warning")
+    if FROZEN:
+        import app as app_module
+        uvicorn.run(app_module.app, host="0.0.0.0", port=PORTA, log_level="warning")
+    else:
+        uvicorn.run("app:app", host="0.0.0.0", port=PORTA, log_level="warning")
 except KeyboardInterrupt:
     print("\nApp encerrado.")
 except Exception as exc:
