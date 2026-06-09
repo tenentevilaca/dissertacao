@@ -42,7 +42,7 @@ def _extrair_id_drive(url: str) -> str:
 def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     """
     Baixa um arquivo público do Google Drive usando urllib (stdlib).
-    Retorna o caminho do arquivo salvo.
+    Usa o novo endpoint drive.usercontent.google.com que contorna a confirmação.
     """
     import urllib.request
     import urllib.parse
@@ -52,62 +52,52 @@ def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     if log_fn:
         log_fn(f"   ID do arquivo: {file_id}")
 
-    # Cria opener com suporte a cookies
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     opener.addheaders = [("User-Agent", "Mozilla/5.0")]
 
-    base_url = "https://drive.google.com/uc"
-    params = urllib.parse.urlencode({"export": "download", "id": file_id})
-    req_url = f"{base_url}?{params}"
+    # Novo endpoint do Google Drive (desde 2024) — contorna página de confirmação
+    urls_tentar = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+    ]
 
-    if log_fn:
-        log_fn("   Conectando ao Google Drive...")
+    data = None
+    content_type = ""
+    resp_final = None
 
-    resp = opener.open(req_url, timeout=60)
-    content_type = resp.headers.get("Content-Type", "")
-    data = resp.read()
-
-    # Arquivo grande: Drive retorna HTML com página de confirmação
-    if "text/html" in content_type:
+    for tentativa_url in urls_tentar:
         if log_fn:
-            log_fn("   Arquivo grande - obtendo token de confirmacao...")
+            log_fn("   Conectando ao Google Drive...")
+        try:
+            resp = opener.open(tentativa_url, timeout=300)
+            content_type = resp.headers.get("Content-Type", "")
+            data = resp.read()
+            resp_final = resp
 
-        html = data.decode("utf-8", errors="replace")
+            # Se baixou HTML, tenta próximo URL
+            if "text/html" in content_type and len(data) < 500_000:
+                if log_fn:
+                    log_fn("   Resposta HTML recebida, tentando alternativa...")
+                data = None
+                continue
+            break
+        except Exception as e:
+            if log_fn:
+                log_fn(f"   Tentativa falhou: {e}")
+            continue
 
-        # Tenta token do cookie download_warning
-        token = None
-        for cookie in jar:
-            if "download_warning" in cookie.name:
-                token = cookie.value
-                break
-
-        if token:
-            params2 = urllib.parse.urlencode({"export": "download", "id": file_id, "confirm": token})
-            resp = opener.open(f"{base_url}?{params2}", timeout=300)
-        else:
-            # Tenta uuid do HTML
-            m = re.search(r'name="uuid"\s+value="([^"]+)"', html)
-            uuid = m.group(1) if m else None
-            m2 = re.search(r'action="([^"]+confirm[^"]+)"', html)
-            if m2 and uuid:
-                confirm_url = m2.group(1).replace("&amp;", "&")
-                post_data = urllib.parse.urlencode({"uuid": uuid}).encode()
-                resp = opener.open(confirm_url, post_data, timeout=300)
-            else:
-                params2 = urllib.parse.urlencode({"export": "download", "id": file_id, "confirm": "t"})
-                resp = opener.open(f"{base_url}?{params2}", timeout=300)
-
-        content_type = resp.headers.get("Content-Type", "")
-        data = resp.read()
+    if not data or len(data) < 1000:
+        raise ValueError("Nao foi possivel baixar o arquivo. Verifique se o link esta publico.")
 
     # Detecta extensão
     ext = ".zip"
-    cd = resp.headers.get("Content-Disposition", "")
-    m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
-    if m_cd:
-        ext = Path(m_cd.group(1).strip()).suffix or ext
-    elif "pdf" in content_type:
+    if resp_final:
+        cd = resp_final.headers.get("Content-Disposition", "")
+        m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
+        if m_cd:
+            ext = Path(m_cd.group(1).strip()).suffix or ext
+    if "pdf" in content_type:
         ext = ".pdf"
     elif "msword" in content_type or "wordprocessing" in content_type:
         ext = ".docx"
