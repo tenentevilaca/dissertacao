@@ -58,6 +58,87 @@ async def icon(size: str):
     return FileResponse(_BASE / "static" / f"icon-{size}.png", media_type="image/png")
 
 
+@app.post("/iniciar-analise-dissertacao")
+async def iniciar_analise_dissertacao(
+    dissertacao: UploadFile = File(...),
+    material_apoio: Optional[UploadFile] = File(None),
+    api_key: str = Form(""),
+):
+    job_id = str(uuid.uuid4())
+    tmpdir = tempfile.mkdtemp(prefix=f"analise_{job_id}_")
+    queue: asyncio.Queue = asyncio.Queue()
+
+    _jobs[job_id] = {
+        "queue": queue,
+        "tmpdir": tmpdir,
+        "status": "aguardando",
+        "relatorio_dir": None,
+        "tipo": "analise",
+    }
+
+    diss_path = Path(tmpdir) / dissertacao.filename
+    diss_path.write_bytes(await dissertacao.read())
+
+    material_path: Optional[str] = None
+    if material_apoio and material_apoio.filename:
+        mat_path = Path(tmpdir) / material_apoio.filename
+        mat_path.write_bytes(await material_apoio.read())
+        material_path = str(mat_path)
+
+    loop = asyncio.get_event_loop()
+    threading.Thread(
+        target=_rodar_analise_dissertacao,
+        args=(job_id, str(diss_path), material_path, api_key, loop),
+        daemon=True,
+    ).start()
+
+    return {"job_id": job_id}
+
+
+@app.get("/progresso-analise/{job_id}")
+async def progresso_analise(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+
+    async def _stream():
+        queue = _jobs[job_id]["queue"]
+        while True:
+            msg = await queue.get()
+            yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+            if msg.get("tipo") in ("concluido", "erro"):
+                break
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/relatorio-analise/{job_id}/{formato}")
+async def baixar_relatorio_analise(job_id: str, formato: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    rel_dir = _jobs[job_id].get("relatorio_dir")
+    if not rel_dir:
+        raise HTTPException(400, "Relatório ainda não gerado")
+
+    nomes = {
+        "html": "relatorio_analise.html",
+        "json": "relatorio_analise.json",
+        "txt":  "relatorio_analise.txt",
+    }
+    if formato not in nomes:
+        raise HTTPException(400, "Formato inválido")
+
+    caminho = Path(rel_dir) / nomes[formato]
+    if not caminho.exists():
+        raise HTTPException(404, "Arquivo não encontrado")
+
+    media = "text/html" if formato == "html" else "application/octet-stream"
+    return FileResponse(caminho, filename=nomes[formato], media_type=media)
+
+
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
@@ -162,6 +243,84 @@ async def limpar_job(job_id: str):
 
 def _enviar(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, msg: dict):
     asyncio.run_coroutine_threadsafe(queue.put(msg), loop)
+
+
+def _rodar_analise_dissertacao(
+    job_id: str,
+    diss_path: str,
+    material_path: Optional[str],
+    api_key: str,
+    loop: asyncio.AbstractEventLoop,
+):
+    queue = _jobs[job_id]["queue"]
+    tmpdir = _jobs[job_id]["tmpdir"]
+    _jobs[job_id]["status"] = "rodando"
+
+    def log(msg: str, tipo: str = "info"):
+        _enviar(loop, queue, {"tipo": tipo, "msg": msg})
+
+    try:
+        if api_key.strip():
+            os.environ["ANTHROPIC_API_KEY"] = api_key
+
+        from analisador import (
+            analisar_dissertacao,
+            extrair_material_de_zip,
+            carregar_material_de_pasta,
+            gerar_relatorio_analise,
+        )
+
+        # Carrega material de apoio
+        material: dict[str, str] = {}
+        if material_path:
+            mat = Path(material_path)
+            destino = Path(tmpdir) / "material_extraido"
+            if mat.suffix.lower() == ".zip":
+                log("📦 Extraindo material de apoio do ZIP…", "etapa")
+                material = extrair_material_de_zip(mat, destino)
+            else:
+                # Arquivo único — trata como material avulso
+                from verificador import ler_arquivo
+                texto = ler_arquivo(mat)
+                if texto and len(texto) > 100:
+                    material = {mat.name: texto}
+            log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
+
+        resultado = analisar_dissertacao(
+            diss_path=diss_path,
+            material=material,
+            api_key=api_key,
+            log_fn=log,
+        )
+
+        log("📊 Gerando relatório…", "etapa")
+        rel_dir = Path(tmpdir) / "relatorio"
+        gerar_relatorio_analise(resultado, rel_dir)
+
+        _jobs[job_id]["relatorio_dir"] = str(rel_dir)
+        _jobs[job_id]["status"] = "concluido"
+
+        caps = resultado.get("capitulos") or []
+        ponts = [c["analise"].get("pontuacao_geral", "") for c in caps]
+
+        _enviar(loop, queue, {
+            "tipo": "concluido",
+            "msg": "Análise concluída!",
+            "resumo": {
+                "n_capitulos":   len(caps),
+                "aprovados":     sum(1 for p in ponts if p == "APROVADO"),
+                "ressalvas":     sum(1 for p in ponts if p == "APROVADO_COM_RESSALVAS"),
+                "revisao":       sum(1 for p in ponts if p == "REQUER_REVISAO"),
+                "n_apoio":       resultado.get("n_arquivos_apoio", 0),
+                "autor":         (resultado.get("metadados") or {}).get("autor") or "—",
+                "titulo":        (resultado.get("metadados") or {}).get("titulo") or "—",
+            },
+        })
+
+    except Exception as exc:
+        import traceback
+        _jobs[job_id]["status"] = "erro"
+        _enviar(loop, queue, {"tipo": "erro", "msg": f"Erro: {exc}", "detalhe": traceback.format_exc()})
 
 
 def _rodar_analise(

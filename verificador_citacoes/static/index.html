@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#1a3a5c">
 <link rel="manifest" href="/manifest.json">
-<title>Verificador de Citações Acadêmicas</title>
+<title>Ferramentas Acadêmicas</title>
 <style>
 /* ── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -274,14 +274,55 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
   display: inline-block;
 }
 
+/* ── Tabs de modo ─────────────────────────────────────────── */
+.mode-tabs {
+  display: flex;
+  gap: 0;
+  background: rgba(255,255,255,.12);
+  border-radius: 8px;
+  padding: 3px;
+  margin-left: auto;
+}
+.mode-tab {
+  padding: 7px 18px;
+  border-radius: 6px;
+  font-size: .8rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: rgba(255,255,255,.7);
+  border: none;
+  background: transparent;
+  transition: background .2s, color .2s;
+  white-space: nowrap;
+}
+.mode-tab.ativo { background: #fff; color: var(--azul); }
+.mode-tab:hover:not(.ativo) { color: #fff; background: rgba(255,255,255,.2); }
+
+/* ── Painel de modo ───────────────────────────────────────── */
+.modo { display: none; }
+.modo.ativo { display: block; }
+
+/* ── Stat cards para analisador ──────────────────────────── */
+.stat-anl { background: #f8fafc; color: var(--cinza); }
+.stat-anl-verde  { background: #f0fdf4; color: var(--verde); }
+.stat-anl-amarelo{ background: #fffbeb; color: var(--amarelo); }
+.stat-anl-vermelho{ background: #fef2f2; color: var(--vermelho); }
+
+/* ── Download área analisador ─────────────────────────────── */
+.dl-btn-anl { background: #1a3a5c; color: #fff; }
+.dl-btn-anl-txt { background: #475569; color: #fff; }
+.dl-btn-anl-json { background: #7c3aed; color: #fff; }
+
 /* ── Responsivo ───────────────────────────────────────────── */
 @media (max-width: 600px) {
-  header { padding: 14px 16px; }
+  header { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
   header h1 { font-size: 1rem; }
   main { padding: 16px 10px 40px; }
   .card { padding: 18px; }
   .step { font-size: .68rem; padding: 10px 4px; }
   .stats-grid { grid-template-columns: repeat(3, 1fr); }
+  .mode-tabs { margin-left: 0; width: 100%; }
+  .mode-tab { flex: 1; text-align: center; }
 }
 </style>
 </head>
@@ -295,12 +336,21 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     <path d="M26 26l1.5 1.5L30 24" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <div>
-    <h1>Verificador de Citações Acadêmicas</h1>
-    <p>ABNT · Verificação semântica por IA · Relatório automático</p>
+    <h1>Ferramentas Acadêmicas</h1>
+    <p>ABNT · IA · Análise crítica · Verificação de citações</p>
+  </div>
+  <div class="mode-tabs">
+    <button class="mode-tab ativo" onclick="mudarModo('verificador')">🔍 Verificador de Citações</button>
+    <button class="mode-tab" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
   </div>
 </header>
 
 <main>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MODO: VERIFICADOR DE CITAÇÕES (existente)                       -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="modo ativo" id="modo-verificador">
 
   <!-- Steps -->
   <div class="steps">
@@ -446,10 +496,151 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
       <div class="download-row" id="download-row"></div>
 
       <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--borda);">
-        <button class="btn btn-outline" onclick="reiniciar()">🔄 Nova Análise</button>
+        <button class="btn btn-outline" onclick="reiniciarVerif()">🔄 Nova Análise</button>
       </div>
     </div>
   </div>
+
+</div><!-- /modo-verificador -->
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MODO: ANALISADOR DE DISSERTAÇÃO (novo)                          -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="modo" id="modo-analisador">
+
+  <!-- Steps do analisador -->
+  <div class="steps">
+    <div class="step ativo" id="anl-nav-1" onclick="anlIrPara(1)"><span class="num">1</span>Dissertação</div>
+    <div class="step"       id="anl-nav-2" onclick="anlIrPara(2)"><span class="num">2</span>Material</div>
+    <div class="step"       id="anl-nav-3" onclick="anlIrPara(3)"><span class="num">3</span>Configurar</div>
+    <div class="step"       id="anl-nav-4" onclick="anlIrPara(4)"><span class="num">4</span>Analisar</div>
+    <div class="step"       id="anl-nav-5" onclick="anlIrPara(5)"><span class="num">5</span>Relatório</div>
+  </div>
+
+  <!-- Passo ANL-1: Dissertação -->
+  <div class="secao ativa" id="anl-passo-1">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Arquivo da Dissertação
+      </h2>
+      <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
+        Carregue o <strong>.docx</strong> da sua dissertação. A IA irá extrair automaticamente
+        metadados (autor, título, programa) e identificar os capítulos.
+      </p>
+      <div class="dropzone" id="anl-drop-diss">
+        <input type="file" id="anl-file-diss" accept=".docx" onchange="anlSelecionarDiss(this)">
+        <div class="icon">📄</div>
+        <strong>Clique ou arraste o arquivo aqui</strong>
+        <p>Formato aceito: <code>.docx</code> (Word)</p>
+      </div>
+      <div id="anl-badge-diss"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="anlIrPara(2)" id="anl-btn-1" disabled>Próximo →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Passo ANL-2: Material de apoio -->
+  <div class="secao" id="anl-passo-2">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+        Material de Apoio (opcional)
+      </h2>
+      <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
+        Carregue um <strong>arquivo .zip</strong> com os PDFs/docx das obras que embasam
+        a dissertação. A IA irá buscar trechos que <em>validam, complementam ou contradizem</em>
+        os argumentos de cada capítulo. Se não tiver, avance sem carregar.
+      </p>
+      <div class="dropzone" id="anl-drop-mat">
+        <input type="file" id="anl-file-mat" accept=".zip" onchange="anlSelecionarMat(this)">
+        <div class="icon">🗜️</div>
+        <strong>Clique ou arraste o arquivo .zip aqui</strong>
+        <p>Um único arquivo ZIP contendo PDF/docx/txt das obras</p>
+      </div>
+      <div id="anl-badge-mat"></div>
+      <div style="margin-top:14px;padding:12px 16px;background:#fffbeb;border-radius:8px;font-size:.82rem;color:#92400e;border:1px solid #fcd34d">
+        💡 <strong>Dica:</strong> Comprima a pasta inteira de artigos e livros em um só .zip.
+        Suportado: PDF, DOCX, TXT. Tamanho recomendado: até 150 MB.
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="anlIrPara(1)">← Voltar</button>
+        <button class="btn btn-primary" onclick="anlIrPara(3)">Próximo →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Passo ANL-3: Configuração -->
+  <div class="secao" id="anl-passo-3">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>
+        Configurações
+      </h2>
+
+      <label for="anl-apikey">Chave da API Claude (Anthropic)</label>
+      <input type="password" id="anl-apikey" placeholder="sk-ant-…"
+             oninput="anlValidarConfig()" autocomplete="off">
+      <p style="font-size:.78rem;color:var(--cinza);margin-top:6px;">
+        Obtenha sua chave em
+        <a href="https://console.anthropic.com" target="_blank" style="color:var(--azul2)">console.anthropic.com</a>.
+        Ela não é armazenada — usada apenas nesta sessão.
+      </p>
+
+      <div style="margin-top:18px;padding:14px;background:#eff6ff;border-radius:8px;border:1px solid #bfdbfe;font-size:.84rem;color:#1e40af">
+        <b>O que esta análise faz:</b><br>
+        ① Extrai autor, título, programa e objetivos automaticamente do seu .docx<br>
+        ② Detecta e analisa cada capítulo: estrutura, teoria, estilo ABNT, coesão<br>
+        ③ Busca no material de apoio argumentos que validam ou tensionam o texto<br>
+        ④ Gera relatório HTML navegável + JSON + TXT
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" onclick="anlIrPara(2)">← Voltar</button>
+        <button class="btn btn-primary" onclick="anlIrPara(4)" id="anl-btn-3" disabled>Iniciar Análise →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Passo ANL-4: Análise em andamento -->
+  <div class="secao" id="anl-passo-4">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Análise em Andamento
+      </h2>
+      <div class="progress-wrap"><div class="progress-bar" id="anl-prog-bar"></div></div>
+      <p id="anl-prog-label" style="font-size:.82rem;color:var(--cinza);margin-bottom:12px;"></p>
+      <div id="anl-log-box" style="background:#0f172a;color:#e2e8f0;border-radius:10px;padding:18px 20px;font-family:'Courier New',monospace;font-size:.82rem;line-height:1.7;max-height:380px;overflow-y:auto;min-height:120px;"></div>
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn btn-outline" id="anl-btn-cancelar" onclick="anlIrPara(1)" style="display:none">← Recomeçar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Passo ANL-5: Relatório -->
+  <div class="secao" id="anl-passo-5">
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Relatório Gerado
+      </h2>
+
+      <div id="anl-meta-resumo" style="margin-bottom:16px;padding:14px;background:#f8fafc;border-radius:8px;border:1px solid var(--borda);font-size:.88rem;"></div>
+
+      <div class="stats-grid" id="anl-stats-grid"></div>
+
+      <p style="font-size:.88rem;color:var(--cinza);margin-bottom:12px;">Baixe o relatório completo:</p>
+      <div class="download-row" id="anl-download-row"></div>
+
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--borda);">
+        <button class="btn btn-outline" onclick="anlReiniciar()">🔄 Nova Análise</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /modo-analisador -->
 
 </main>
 
@@ -673,7 +864,7 @@ function mostrarRelatorio(resumo, jobId) {
   `;
 }
 
-function reiniciar() {
+function reiniciarVerif() {
   if (estado.jobId) fetch('/job/' + estado.jobId, { method: 'DELETE' }).catch(() => {});
   estado.fileDiss = null;
   estado.fileRefs = [];
@@ -691,6 +882,220 @@ function reiniciar() {
   document.getElementById('prog-bar').style.background = '';
   document.getElementById('log-box').innerHTML = '';
   irPara(1);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// ANALISADOR DE DISSERTAÇÃO
+// ════════════════════════════════════════════════════════════════════
+
+const anlEstado = { passo: 1, fileDiss: null, fileMat: null, jobId: null };
+
+function mudarModo(modo) {
+  document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('ativo'));
+  document.getElementById('modo-' + modo).classList.add('ativo');
+  const idx = modo === 'verificador' ? 0 : 1;
+  document.querySelectorAll('.mode-tab')[idx].classList.add('ativo');
+}
+
+function anlIrPara(n) {
+  document.querySelectorAll('#modo-analisador .secao').forEach(s => s.classList.remove('ativa'));
+  document.getElementById('anl-passo-' + n).classList.add('ativa');
+  document.querySelectorAll('#modo-analisador .step').forEach((s, i) => {
+    s.classList.remove('ativo', 'completo');
+    if (i + 1 === n) s.classList.add('ativo');
+    else if (i + 1 < n) s.classList.add('completo');
+  });
+  anlEstado.passo = n;
+  if (n === 4) anlIniciarAnalise();
+}
+
+function anlSelecionarDiss(input) {
+  const f = input.files[0]; if (!f) return;
+  anlEstado.fileDiss = f;
+  document.getElementById('anl-badge-diss').innerHTML =
+    `<span class="file-badge">📄 ${f.name} <button onclick="anlRemoverDiss()">×</button></span>`;
+  document.getElementById('anl-btn-1').disabled = false;
+}
+function anlRemoverDiss() {
+  anlEstado.fileDiss = null;
+  document.getElementById('anl-badge-diss').innerHTML = '';
+  document.getElementById('anl-file-diss').value = '';
+  document.getElementById('anl-btn-1').disabled = true;
+}
+
+function anlSelecionarMat(input) {
+  const f = input.files[0]; if (!f) return;
+  anlEstado.fileMat = f;
+  document.getElementById('anl-badge-mat').innerHTML =
+    `<span class="file-badge">🗜️ ${f.name} (${(f.size/1024/1024).toFixed(1)} MB) <button onclick="anlRemoverMat()">×</button></span>`;
+}
+function anlRemoverMat() {
+  anlEstado.fileMat = null;
+  document.getElementById('anl-badge-mat').innerHTML = '';
+  document.getElementById('anl-file-mat').value = '';
+}
+
+function anlValidarConfig() {
+  const key = document.getElementById('anl-apikey').value.trim();
+  document.getElementById('anl-btn-3').disabled = !key.startsWith('sk-');
+}
+
+// Drag & drop para os dropzones do analisador
+document.querySelectorAll('#modo-analisador .dropzone').forEach(z => {
+  z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('drag-over'); });
+  z.addEventListener('dragleave', () => z.classList.remove('drag-over'));
+  z.addEventListener('drop', e => {
+    e.preventDefault(); z.classList.remove('drag-over');
+    const inp = z.querySelector('input[type=file]');
+    const dt = new DataTransfer();
+    Array.from(e.dataTransfer.files).forEach(f => dt.items.add(f));
+    inp.files = dt.files;
+    inp.dispatchEvent(new Event('change'));
+  });
+});
+
+function anlAdicionarLog(container, texto, tipo) {
+  const classes = { info:'log-info', etapa:'log-etapa', ok:'log-ok', warn:'log-warn', erro:'log-erro' };
+  const line = document.createElement('div');
+  line.className = classes[tipo] || 'log-info';
+  line.textContent = texto;
+  container.appendChild(line);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function anlIniciarAnalise() {
+  const log = document.getElementById('anl-log-box');
+  const bar = document.getElementById('anl-prog-bar');
+  const lbl = document.getElementById('anl-prog-label');
+  log.innerHTML = ''; bar.style.width = '2%';
+  lbl.textContent = 'Conectando…';
+
+  anlAdicionarLog(log, '⏳ Verificando servidor…', 'info');
+  let ok = false;
+  for (let t = 1; t <= 8; t++) {
+    try {
+      const r = await fetch('/ping', { signal: AbortSignal.timeout(8000) });
+      if (r.ok) { ok = true; break; }
+    } catch(_) {}
+    anlAdicionarLog(log, `   Servidor acordando… (${t*8}s)`, 'warn');
+    bar.style.width = (t*5) + '%';
+    await new Promise(r => setTimeout(r, 8000));
+  }
+  if (!ok) {
+    anlAdicionarLog(log, '✗ Servidor não respondeu.', 'erro');
+    document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
+    return;
+  }
+  anlAdicionarLog(log, '✓ Servidor pronto. Enviando arquivos…', 'ok');
+  bar.style.width = '8%'; lbl.textContent = 'Enviando…';
+
+  const form = new FormData();
+  form.append('dissertacao', anlEstado.fileDiss, anlEstado.fileDiss.name);
+  if (anlEstado.fileMat) form.append('material_apoio', anlEstado.fileMat, anlEstado.fileMat.name);
+  form.append('api_key', document.getElementById('anl-apikey').value.trim());
+
+  let resp;
+  try {
+    resp = await fetch('/iniciar-analise-dissertacao', { method: 'POST', body: form });
+  } catch(err) {
+    anlAdicionarLog(log, '✗ Erro ao enviar: ' + err, 'erro');
+    document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
+    return;
+  }
+  if (!resp.ok) {
+    anlAdicionarLog(log, '✗ Erro do servidor: ' + await resp.text(), 'erro');
+    document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
+    return;
+  }
+  const { job_id } = await resp.json();
+  anlEstado.jobId = job_id;
+  bar.style.width = '12%'; lbl.textContent = 'Processando…';
+
+  const sse = new EventSource(`/progresso-analise/${job_id}`);
+  let nEtapas = 0;
+
+  sse.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.tipo === 'etapa') {
+      nEtapas++;
+      bar.style.width = Math.min(90, 12 + nEtapas * 10) + '%';
+      lbl.textContent = msg.msg;
+      anlAdicionarLog(log, msg.msg, 'etapa');
+    } else if (msg.tipo === 'info') {
+      anlAdicionarLog(log, msg.msg, 'info');
+    } else if (msg.tipo === 'ok') {
+      anlAdicionarLog(log, msg.msg, 'ok');
+    } else if (msg.tipo === 'warn') {
+      anlAdicionarLog(log, msg.msg, 'warn');
+    } else if (msg.tipo === 'concluido') {
+      sse.close();
+      bar.style.width = '100%';
+      lbl.textContent = '✓ Concluído!';
+      anlAdicionarLog(log, '✓ ' + msg.msg, 'ok');
+      document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
+      setTimeout(() => anlMostrarRelatorio(msg.resumo, job_id), 800);
+    } else if (msg.tipo === 'erro') {
+      sse.close();
+      bar.style.background = '#dc2626';
+      lbl.textContent = 'Erro na análise';
+      anlAdicionarLog(log, '✗ ' + msg.msg, 'erro');
+      if (msg.detalhe) anlAdicionarLog(log, msg.detalhe, 'erro');
+      document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
+    }
+  };
+  sse.onerror = () => { sse.close(); anlAdicionarLog(log, 'Conexão interrompida.', 'warn'); };
+}
+
+function anlMostrarRelatorio(resumo, jobId) {
+  anlIrPara(5);
+
+  // Resumo do cabeçalho
+  document.getElementById('anl-meta-resumo').innerHTML =
+    `<b>${resumo.titulo || '—'}</b><br>
+     <span style="color:var(--cinza)">Autor: ${resumo.autor || '—'}</span>`;
+
+  const stats = [
+    { val: resumo.n_capitulos, label: 'Capítulos',    cls: 'stat-neutro' },
+    { val: resumo.aprovados,   label: 'Aprovados',    cls: 'stat-correto' },
+    { val: resumo.ressalvas,   label: 'Com ressalvas',cls: 'stat-parcial' },
+    { val: resumo.revisao,     label: 'Requer revisão',cls:'stat-incorreto'},
+    { val: resumo.n_apoio,     label: 'Arqs. apoio',  cls: 'stat-aviso' },
+  ];
+  document.getElementById('anl-stats-grid').innerHTML = stats.map(s =>
+    `<div class="stat-card ${s.cls}"><strong>${s.val}</strong><span>${s.label}</span></div>`
+  ).join('');
+
+  document.getElementById('anl-download-row').innerHTML = `
+    <a class="dl-btn dl-html" href="/relatorio-analise/${jobId}/html" target="_blank">
+      🌐 Relatório HTML (abrir)
+    </a>
+    <a class="dl-btn dl-html" href="/relatorio-analise/${jobId}/html" download>
+      ⬇ Baixar HTML
+    </a>
+    <a class="dl-btn dl-txt" href="/relatorio-analise/${jobId}/txt" download>
+      📄 TXT
+    </a>
+    <a class="dl-btn dl-json" href="/relatorio-analise/${jobId}/json" download>
+      { } JSON
+    </a>
+  `;
+}
+
+function anlReiniciar() {
+  if (anlEstado.jobId) fetch('/job/' + anlEstado.jobId, { method: 'DELETE' }).catch(() => {});
+  anlEstado.fileDiss = null; anlEstado.fileMat = null; anlEstado.jobId = null;
+  document.getElementById('anl-badge-diss').innerHTML = '';
+  document.getElementById('anl-badge-mat').innerHTML = '';
+  document.getElementById('anl-file-diss').value = '';
+  document.getElementById('anl-file-mat').value = '';
+  document.getElementById('anl-apikey').value = '';
+  document.getElementById('anl-btn-1').disabled = true;
+  document.getElementById('anl-btn-3').disabled = true;
+  document.getElementById('anl-prog-bar').style.width = '0%';
+  document.getElementById('anl-prog-bar').style.background = '';
+  document.getElementById('anl-log-box').innerHTML = '';
+  anlIrPara(1);
 }
 </script>
 </body>
