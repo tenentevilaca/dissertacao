@@ -41,63 +41,88 @@ def _extrair_id_drive(url: str) -> str:
 
 def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     """
-    Baixa um arquivo público do Google Drive usando httpx (já incluído via anthropic).
+    Baixa um arquivo público do Google Drive usando urllib (stdlib).
     Retorna o caminho do arquivo salvo.
     """
-    import httpx
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
 
     file_id = _extrair_id_drive(url)
     if log_fn:
         log_fn(f"   ID do arquivo: {file_id}")
 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    # Cria opener com suporte a cookies
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
     base_url = "https://drive.google.com/uc"
-    params = {"export": "download", "id": file_id}
+    params = urllib.parse.urlencode({"export": "download", "id": file_id})
+    req_url = f"{base_url}?{params}"
 
     if log_fn:
-        log_fn("   Conectando ao Google Drive…")
+        log_fn("   Conectando ao Google Drive...")
 
-    with httpx.Client(headers=headers, follow_redirects=True, timeout=300) as client:
-        resp = client.get(base_url, params=params)
+    resp = opener.open(req_url, timeout=60)
+    content_type = resp.headers.get("Content-Type", "")
+    data = resp.read()
 
-        content_type = resp.headers.get("Content-Type", "")
-        if "text/html" in content_type:
-            if log_fn:
-                log_fn("   Arquivo grande — obtendo token de confirmação…")
-            m = re.search(r'name="uuid"\s+value="([^"]+)"', resp.text)
+    # Arquivo grande: Drive retorna HTML com página de confirmação
+    if "text/html" in content_type:
+        if log_fn:
+            log_fn("   Arquivo grande - obtendo token de confirmacao...")
+
+        html = data.decode("utf-8", errors="replace")
+
+        # Tenta token do cookie download_warning
+        token = None
+        for cookie in jar:
+            if "download_warning" in cookie.name:
+                token = cookie.value
+                break
+
+        if token:
+            params2 = urllib.parse.urlencode({"export": "download", "id": file_id, "confirm": token})
+            resp = opener.open(f"{base_url}?{params2}", timeout=300)
+        else:
+            # Tenta uuid do HTML
+            m = re.search(r'name="uuid"\s+value="([^"]+)"', html)
             uuid = m.group(1) if m else None
-            m2 = re.search(r'action="([^"]+confirm[^"]+)"', resp.text)
+            m2 = re.search(r'action="([^"]+confirm[^"]+)"', html)
             if m2 and uuid:
                 confirm_url = m2.group(1).replace("&amp;", "&")
-                resp = client.post(confirm_url, data={"uuid": uuid})
+                post_data = urllib.parse.urlencode({"uuid": uuid}).encode()
+                resp = opener.open(confirm_url, post_data, timeout=300)
             else:
-                params["confirm"] = "t"
-                resp = client.get(base_url, params=params)
+                params2 = urllib.parse.urlencode({"export": "download", "id": file_id, "confirm": "t"})
+                resp = opener.open(f"{base_url}?{params2}", timeout=300)
 
-        resp.raise_for_status()
+        content_type = resp.headers.get("Content-Type", "")
+        data = resp.read()
 
-        ext = ".zip"
-        cd = resp.headers.get("Content-Disposition", "")
-        m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
-        if m_cd:
-            ext = Path(m_cd.group(1).strip()).suffix or ext
-        elif "pdf" in content_type:
-            ext = ".pdf"
-        elif "msword" in content_type or "wordprocessing" in content_type:
-            ext = ".docx"
+    # Detecta extensão
+    ext = ".zip"
+    cd = resp.headers.get("Content-Disposition", "")
+    m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
+    if m_cd:
+        ext = Path(m_cd.group(1).strip()).suffix or ext
+    elif "pdf" in content_type:
+        ext = ".pdf"
+    elif "msword" in content_type or "wordprocessing" in content_type:
+        ext = ".docx"
 
-        caminho_final = destino.with_suffix(ext)
-        if log_fn:
-            log_fn(f"   Salvando como {caminho_final.name}…")
+    caminho_final = destino.with_suffix(ext)
+    if log_fn:
+        log_fn(f"   Salvando como {caminho_final.name}...")
 
-        with open(caminho_final, "wb") as f:
-            f.write(resp.content)
+    with open(caminho_final, "wb") as f:
+        f.write(data)
 
-        total = len(resp.content)
-        if log_fn:
-            log_fn(f"   Download concluido: {total/(1024*1024):.1f} MB -> {caminho_final.name}")
+    if log_fn:
+        log_fn(f"   Download concluido: {len(data)/(1024*1024):.1f} MB -> {caminho_final.name}")
 
-        return caminho_final
+    return caminho_final
 
 
 # ════════════════════════════════════════════════════════════════════════
