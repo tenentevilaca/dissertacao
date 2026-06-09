@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Analisador de Dissertações Acadêmicas</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --azul:    #1a3a5c;
+  --azul2:   #2563eb;
+  --verde:   #16a34a;
+  --amarelo: #d97706;
+  --vermelho:#dc2626;
+  --cinza:   #64748b;
+  --fundo:   #f1f5f9;
+  --branco:  #ffffff;
+  --borda:   #e2e8f0;
+  --sombra:  0 2px 12px rgba(0,0,0,.08);
+}
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--fundo);
+  color: #1e293b;
+  min-height: 100vh;
+}
+
+header {
+  background: var(--azul);
+  color: #fff;
+  padding: 18px 32px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+header h1 { font-size: 1.3rem; font-weight: 700; }
+header p  { font-size: .85rem; opacity: .75; margin-top: 2px; }
+
+main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+
+/* ── Cards ── */
+.card {
+  background: var(--branco);
+  border-radius: 12px;
+  border: 1px solid var(--borda);
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: var(--sombra);
+}
+.card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--azul);
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid var(--borda);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Upload zones ── */
+.upload-zone {
+  border: 2px dashed var(--borda);
+  border-radius: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  position: relative;
+  margin-bottom: 16px;
+}
+.upload-zone:hover, .upload-zone.drag { border-color: var(--azul2); background: #eff6ff; }
+.upload-zone.selecionado { border-color: var(--verde); background: #f0fdf4; }
+.upload-zone input[type=file] {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+.upload-zone .icone { font-size: 2rem; margin-bottom: 8px; }
+.upload-zone .label { font-weight: 600; color: var(--azul); font-size: .95rem; }
+.upload-zone .sub { font-size: .8rem; color: var(--cinza); margin-top: 4px; }
+.upload-zone .nome-arquivo {
+  font-size: .85rem; font-weight: 600; color: var(--verde);
+  margin-top: 8px; word-break: break-all;
+}
+
+/* ── API Key ── */
+.campo-api {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.campo-api input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  font-size: .9rem;
+  font-family: monospace;
+}
+.campo-api input:focus { outline: none; border-color: var(--azul2); }
+.btn-ver {
+  padding: 10px 14px;
+  background: var(--fundo);
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: .85rem;
+  color: var(--cinza);
+  white-space: nowrap;
+}
+.btn-ver:hover { background: var(--borda); }
+
+/* ── Botão principal ── */
+.btn-analisar {
+  width: 100%;
+  padding: 16px;
+  background: var(--azul);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .2s, transform .1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.btn-analisar:hover:not(:disabled) { background: #1e4976; transform: translateY(-1px); }
+.btn-analisar:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Progresso ── */
+#secao-progresso { display: none; }
+.barra-outer {
+  background: var(--fundo);
+  border-radius: 20px;
+  height: 14px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid var(--borda);
+}
+.barra-inner {
+  height: 100%;
+  background: linear-gradient(90deg, var(--azul), var(--azul2));
+  border-radius: 20px;
+  transition: width .5s ease;
+  width: 0%;
+}
+.pct-label { font-size: .8rem; color: var(--cinza); text-align: right; margin-bottom: 12px; }
+
+.log-container {
+  background: #0f172a;
+  color: #94a3b8;
+  border-radius: 8px;
+  padding: 16px;
+  font-family: monospace;
+  font-size: .82rem;
+  max-height: 320px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+.log-container .msg-progresso { color: #94a3b8; }
+.log-container .msg-aviso    { color: var(--amarelo); }
+.log-container .msg-concluido{ color: #4ade80; font-weight: bold; }
+.log-container .msg-erro     { color: #f87171; }
+
+/* ── Metadados extraídos ── */
+#secao-metadados { display: none; }
+.meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 600px) { .meta-grid { grid-template-columns: 1fr; } }
+.meta-item label { font-size: .75rem; color: var(--cinza); font-weight: 600; text-transform: uppercase; display: block; margin-bottom: 3px; }
+.meta-item span  { font-size: .9rem; color: #1e293b; }
+
+/* ── Resultados ── */
+#secao-resultados { display: none; }
+.btn-download {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  background: var(--azul);
+  color: #fff;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: .95rem;
+  margin-bottom: 12px;
+  transition: background .2s;
+}
+.btn-download:hover { background: #1e4976; }
+.btn-download.verde { background: var(--verde); }
+.btn-download.verde:hover { background: #15803d; }
+.btn-download svg { flex-shrink: 0; }
+
+.info-box {
+  background: #eff6ff;
+  border-left: 4px solid var(--azul2);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-size: .85rem;
+  color: #1e40af;
+  margin-top: 16px;
+}
+
+/* ── Instrução ── */
+.instrucao {
+  background: #fefce8;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: .83rem;
+  color: #92400e;
+  margin-bottom: 8px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+    <rect width="40" height="40" rx="10" fill="#2563eb" opacity=".3"/>
+    <path d="M10 28 L10 12 L22 12 L30 20 L30 28 Z" stroke="#fff" stroke-width="2" fill="none" stroke-linejoin="round"/>
+    <path d="M22 12 L22 20 L30 20" stroke="#fff" stroke-width="2" fill="none"/>
+    <line x1="14" y1="20" x2="24" y2="20" stroke="#fff" stroke-width="1.5"/>
+    <line x1="14" y1="23.5" x2="24" y2="23.5" stroke="#fff" stroke-width="1.5"/>
+  </svg>
+  <div>
+    <h1>Analisador de Dissertações Acadêmicas</h1>
+    <p>Análise crítica • Reescrita • Validação com material de apoio</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- FORMULÁRIO -->
+  <div id="secao-form">
+
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 16V4a1 1 0 011-1h7l4 4v9a1 1 0 01-1 1H5a1 1 0 01-1-1z" stroke="#1a3a5c" stroke-width="1.5" fill="none"/><path d="M11 3v4h4" stroke="#1a3a5c" stroke-width="1.5" fill="none"/></svg>
+        1. Dissertação Principal
+      </h2>
+      <div class="upload-zone" id="zone-diss" onclick="document.getElementById('inp-diss').click()">
+        <input type="file" id="inp-diss" accept=".docx" style="display:none">
+        <div class="icone">📄</div>
+        <div class="label">Clique para selecionar a dissertação</div>
+        <div class="sub">Formato aceito: .docx</div>
+        <div class="nome-arquivo" id="nome-diss"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 3h10a1 1 0 011 1v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="#1a3a5c" stroke-width="1.5" fill="none"/><path d="M7 7h6M7 10h6M7 13h4" stroke="#1a3a5c" stroke-width="1.5"/></svg>
+        2. Material de Apoio (opcional)
+      </h2>
+      <div class="instrucao">
+        📦 Envie uma pasta zipada (.zip) contendo os PDFs, .docx ou .txt das obras de referência usadas na dissertação.
+        O app buscará trechos que validam os argumentos do texto.
+      </div>
+      <div class="upload-zone" id="zone-apoio" onclick="document.getElementById('inp-apoio').click()">
+        <input type="file" id="inp-apoio" accept=".zip" style="display:none">
+        <div class="icone">📦</div>
+        <div class="label">Clique para selecionar o arquivo .zip</div>
+        <div class="sub">Pasta compactada com as obras de referência</div>
+        <div class="nome-arquivo" id="nome-apoio"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="#1a3a5c" stroke-width="1.5" fill="none"/><path d="M10 9v5M10 7h.01" stroke="#1a3a5c" stroke-width="1.5" stroke-linecap="round"/></svg>
+        3. Chave da API Claude
+      </h2>
+      <div class="campo-api">
+        <input type="password" id="inp-api" placeholder="sk-ant-api03-..." autocomplete="off">
+        <button class="btn-ver" onclick="toggleApiVis()">👁 Ver</button>
+      </div>
+      <p style="font-size:.78rem;color:var(--cinza);margin-top:8px;">
+        Necessária para análise com IA. Obtenha em
+        <a href="https://console.anthropic.com" target="_blank" style="color:var(--azul2)">console.anthropic.com</a>.
+        A chave não é armazenada.
+      </p>
+    </div>
+
+    <button class="btn-analisar" id="btn-iniciar" onclick="iniciarAnalise()">
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="11" cy="11" r="9" stroke="#fff" stroke-width="1.8"/><path d="M8.5 7.5l6 3.5-6 3.5V7.5z" fill="#fff"/></svg>
+      Iniciar Análise Completa
+    </button>
+
+  </div><!-- /secao-form -->
+
+
+  <!-- PROGRESSO -->
+  <div id="secao-progresso" class="card">
+    <h2>⏳ Processando...</h2>
+    <div class="barra-outer"><div class="barra-inner" id="barra"></div></div>
+    <div class="pct-label" id="pct-label">0%</div>
+    <div class="log-container" id="log"></div>
+  </div>
+
+
+  <!-- METADADOS -->
+  <div id="secao-metadados" class="card">
+    <h2>📋 Metadados Identificados Automaticamente</h2>
+    <div class="meta-grid" id="meta-grid"></div>
+  </div>
+
+
+  <!-- RESULTADOS -->
+  <div id="secao-resultados" class="card">
+    <h2>✅ Análise Concluída — Downloads</h2>
+    <a class="btn-download verde" id="btn-diss-reescrita" href="#" download>
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 3v12M6 10l5 5 5-5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M4 18h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+      Dissertação Reescrita (.docx)
+    </a>
+    <a class="btn-download" id="btn-relatorio" href="#" download>
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 3v12M6 10l5 5 5-5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M4 18h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+      Relatório de Análise (.docx)
+    </a>
+    <div class="info-box">
+      <strong>O que você recebe:</strong><br>
+      • <strong>Dissertação Reescrita</strong>: documento completo com todas as melhorias aplicadas (estilo, coesão, integração teórico-empírica, conformidade ABNT).<br>
+      • <strong>Relatório de Análise</strong>: diagnóstico detalhado capítulo a capítulo com pontuação, problemas identificados e recomendações aplicadas.
+    </div>
+  </div>
+
+</main>
+
+<script>
+let jobId = null;
+let evtSource = null;
+
+// ── Upload zones ──────────────────────────────────────────────────────────
+document.getElementById('inp-diss').addEventListener('change', function() {
+  if (this.files[0]) {
+    document.getElementById('nome-diss').textContent = '✓ ' + this.files[0].name;
+    document.getElementById('zone-diss').classList.add('selecionado');
+  }
+});
+document.getElementById('inp-apoio').addEventListener('change', function() {
+  if (this.files[0]) {
+    document.getElementById('nome-apoio').textContent = '✓ ' + this.files[0].name;
+    document.getElementById('zone-apoio').classList.add('selecionado');
+  }
+});
+
+// Drag-and-drop
+['zone-diss', 'zone-apoio'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drag'));
+  el.addEventListener('drop', e => {
+    e.preventDefault();
+    el.classList.remove('drag');
+    const input = el.querySelector('input[type=file]');
+    if (e.dataTransfer.files[0]) {
+      // Transfere arquivo para o input
+      const dt = new DataTransfer();
+      dt.items.add(e.dataTransfer.files[0]);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('change'));
+    }
+  });
+});
+
+function toggleApiVis() {
+  const inp = document.getElementById('inp-api');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+// ── Iniciar análise ───────────────────────────────────────────────────────
+async function iniciarAnalise() {
+  const diss = document.getElementById('inp-diss').files[0];
+  const apoio = document.getElementById('inp-apoio').files[0];
+  const apiKey = document.getElementById('inp-api').value.trim();
+
+  if (!diss) { alert('Selecione a dissertação principal (.docx).'); return; }
+  if (!apiKey) { alert('Informe a chave da API Claude.'); return; }
+
+  document.getElementById('btn-iniciar').disabled = true;
+  document.getElementById('secao-progresso').style.display = 'block';
+  document.getElementById('secao-resultados').style.display = 'none';
+  document.getElementById('secao-metadados').style.display = 'none';
+  document.getElementById('log').innerHTML = '';
+  atualizarBarra(0);
+
+  const form = new FormData();
+  form.append('dissertacao', diss);
+  if (apoio) form.append('apoio', apoio);
+  form.append('api_key', apiKey);
+
+  try {
+    const resp = await fetch('/iniciar', { method: 'POST', body: form });
+    const data = await resp.json();
+    jobId = data.job_id;
+
+    evtSource = new EventSource(`/progresso/${jobId}`);
+    evtSource.onmessage = tratarEvento;
+    evtSource.onerror = () => addLog('erro', 'Conexão perdida. Recarregue a página.');
+  } catch (e) {
+    addLog('erro', 'Erro ao iniciar: ' + e.message);
+    document.getElementById('btn-iniciar').disabled = false;
+  }
+}
+
+// ── Eventos SSE ───────────────────────────────────────────────────────────
+function tratarEvento(evt) {
+  const msg = JSON.parse(evt.data);
+  if (msg.tipo === 'ping') return;
+
+  addLog(msg.tipo, msg.mensagem);
+
+  if (msg.pct !== undefined) atualizarBarra(msg.pct);
+
+  if (msg.tipo === 'concluido') {
+    evtSource.close();
+    document.getElementById('btn-iniciar').disabled = false;
+    mostrarResultados(msg);
+    if (msg.metadados) mostrarMetadados(msg.metadados);
+  }
+
+  if (msg.tipo === 'erro') {
+    evtSource.close();
+    document.getElementById('btn-iniciar').disabled = false;
+  }
+}
+
+function addLog(tipo, texto) {
+  const log = document.getElementById('log');
+  const linha = document.createElement('div');
+  linha.className = 'msg-' + tipo;
+  const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  linha.textContent = `[${ts}] ${texto}`;
+  log.appendChild(linha);
+  log.scrollTop = log.scrollHeight;
+}
+
+function atualizarBarra(pct) {
+  document.getElementById('barra').style.width = pct + '%';
+  document.getElementById('pct-label').textContent = pct + '%';
+}
+
+// ── Metadados ─────────────────────────────────────────────────────────────
+function mostrarMetadados(meta) {
+  const campos = [
+    ['autor', 'Autor'],
+    ['titulo', 'Título'],
+    ['programa', 'Programa'],
+    ['instituicao', 'Instituição'],
+    ['orientador', 'Orientador'],
+    ['area', 'Área de Concentração'],
+    ['metodologia', 'Metodologia'],
+    ['problema_pesquisa', 'Problema de Pesquisa'],
+  ];
+
+  const grid = document.getElementById('meta-grid');
+  grid.innerHTML = '';
+  campos.forEach(([chave, label]) => {
+    const val = meta[chave];
+    if (val) {
+      const div = document.createElement('div');
+      div.className = 'meta-item';
+      div.innerHTML = `<label>${label}</label><span>${val}</span>`;
+      grid.appendChild(div);
+    }
+  });
+
+  document.getElementById('secao-metadados').style.display = 'block';
+}
+
+// ── Resultados ────────────────────────────────────────────────────────────
+function mostrarResultados(msg) {
+  document.getElementById('secao-resultados').style.display = 'block';
+
+  const arquivos = msg.arquivos || ['relatorio_analise.docx', 'dissertacao_reescrita.docx'];
+
+  arquivos.forEach(arq => {
+    const url = `/download/${jobId}/${arq}`;
+    if (arq.includes('dissertacao_reescrita')) {
+      const btn = document.getElementById('btn-diss-reescrita');
+      btn.href = url;
+      btn.download = arq;
+    } else if (arq.includes('relatorio')) {
+      const btn = document.getElementById('btn-relatorio');
+      btn.href = url;
+      btn.download = arq;
+    }
+  });
+
+  // Scroll para resultados
+  document.getElementById('secao-resultados').scrollIntoView({ behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
