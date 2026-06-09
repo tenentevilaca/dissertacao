@@ -3,6 +3,7 @@ Analisador de Dissertação — análise crítica estrutural baseada no template
 Reusa ler_docx, ler_arquivo e _extrair_trecho_relevante do verificador.py.
 """
 
+import io
 import json
 import re
 import zipfile
@@ -39,13 +40,12 @@ def _extrair_id_drive(url: str) -> str:
     )
 
 
-def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
+def baixar_google_drive_bytes(url: str, log_fn=None) -> tuple:
     """
-    Baixa um arquivo público do Google Drive usando urllib (stdlib).
-    Usa o novo endpoint drive.usercontent.google.com que contorna a confirmação.
+    Baixa arquivo do Google Drive direto na memória (sem salvar no disco).
+    Retorna (bytes, extensao).
     """
     import urllib.request
-    import urllib.parse
     import http.cookiejar
 
     file_id = _extrair_id_drive(url)
@@ -56,7 +56,6 @@ def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     opener.addheaders = [("User-Agent", "Mozilla/5.0")]
 
-    # Novo endpoint do Google Drive (desde 2024) — contorna página de confirmação
     urls_tentar = [
         f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t",
         f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
@@ -74,11 +73,9 @@ def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
             content_type = resp.headers.get("Content-Type", "")
             data = resp.read()
             resp_final = resp
-
-            # Se baixou HTML, tenta próximo URL
             if "text/html" in content_type and len(data) < 500_000:
                 if log_fn:
-                    log_fn("   Resposta HTML recebida, tentando alternativa...")
+                    log_fn("   Resposta HTML, tentando alternativa...")
                 data = None
                 continue
             break
@@ -89,6 +86,9 @@ def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
 
     if not data or len(data) < 1000:
         raise ValueError("Nao foi possivel baixar o arquivo. Verifique se o link esta publico.")
+
+    if log_fn:
+        log_fn(f"   Download concluido: {len(data)/(1024*1024):.1f} MB")
 
     # Detecta extensão
     ext = ".zip"
@@ -102,17 +102,15 @@ def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     elif "msword" in content_type or "wordprocessing" in content_type:
         ext = ".docx"
 
-    caminho_final = destino.with_suffix(ext)
-    if log_fn:
-        log_fn(f"   Salvando como {caminho_final.name}...")
+    return data, ext
 
-    with open(caminho_final, "wb") as f:
-        f.write(data)
 
-    if log_fn:
-        log_fn(f"   Download concluido: {len(data)/(1024*1024):.1f} MB -> {caminho_final.name}")
-
-    return caminho_final
+def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
+    """Compat: baixa e salva no disco. Retorna Path."""
+    data, ext = baixar_google_drive_bytes(url, log_fn)
+    caminho = destino.with_suffix(ext)
+    caminho.write_bytes(data)
+    return caminho
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -329,43 +327,57 @@ def detectar_capitulos(texto: str) -> list[tuple[str, str]]:
 EXTENSOES_APOIO = {".pdf", ".docx", ".doc", ".txt"}
 
 
-def extrair_material_de_zip(zip_path: Path, destino: Path) -> dict[str, str]:
+def _ler_bytes(data: bytes, ext: str) -> str:
+    """Lê conteúdo de um arquivo a partir de bytes, sem salvar no disco."""
+    try:
+        if ext == ".txt":
+            return data.decode("utf-8", errors="replace")
+        elif ext in (".docx", ".doc"):
+            from verificador import _xml_para_texto
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                partes = []
+                if "word/document.xml" in z.namelist():
+                    partes.append(_xml_para_texto(z.read("word/document.xml")))
+                if "word/footnotes.xml" in z.namelist():
+                    partes.append(_xml_para_texto(z.read("word/footnotes.xml")))
+                return "\n".join(partes)
+        elif ext == ".pdf":
+            import fitz
+            doc = fitz.open(stream=data, filetype="pdf")
+            return "\n".join(page.get_text() for page in doc)
+    except Exception as e:
+        return f"[ERRO ao ler: {e}]"
+    return ""
+
+
+def extrair_material_de_zip(zip_source, destino: Path = None) -> dict[str, str]:
     """
-    Extrai um ZIP e lê todos os arquivos suportados.
-    Achata a estrutura de pastas e trunca nomes longos para evitar limite do Windows.
+    Lê arquivos suportados de um ZIP diretamente na memória.
+    zip_source pode ser Path (arquivo no disco) ou bytes.
     Retorna dict nome_arquivo → texto.
     """
-    destino.mkdir(parents=True, exist_ok=True)
+    if isinstance(zip_source, (str, Path)):
+        zip_bytes = Path(zip_source).read_bytes()
+    else:
+        zip_bytes = zip_source
 
     material: dict[str, str] = {}
 
-    with zipfile.ZipFile(str(zip_path)) as z:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         for info in z.infolist():
-            nome_original = Path(info.filename).name
-            if nome_original.startswith("~$") or info.is_dir():
+            nome = Path(info.filename).name
+            if nome.startswith("~$") or info.is_dir():
                 continue
             ext = Path(info.filename).suffix.lower()
             if ext not in EXTENSOES_APOIO:
                 continue
-
-            # Trunca nome para evitar MAX_PATH do Windows (260 chars)
-            stem = Path(nome_original).stem[:60]
-            nome_curto = stem + ext
-            destino_arq = destino / nome_curto
-
-            # Evita colisão de nomes
-            contador = 1
-            while destino_arq.exists():
-                destino_arq = destino / f"{stem}_{contador}{ext}"
-                contador += 1
-
-            # Extrai direto para o destino achato
-            with z.open(info) as src, open(destino_arq, "wb") as dst:
-                dst.write(src.read())
-
-            texto = ler_arquivo(destino_arq)
-            if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
-                material[nome_original[:80]] = texto  # usa nome original como chave (truncado)
+            try:
+                data = z.read(info)
+                texto = _ler_bytes(data, ext)
+                if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
+                    material[nome[:80]] = texto
+            except Exception:
+                continue
 
     return material
 

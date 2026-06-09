@@ -290,6 +290,8 @@ def _rodar_analise_dissertacao(
             carregar_material_de_pasta,
             gerar_relatorio_analise,
             baixar_google_drive,
+            baixar_google_drive_bytes,
+            _ler_bytes as _ler_bytes_apoio,
         )
 
         # Baixa dissertação do Drive se necessário
@@ -315,8 +317,8 @@ def _rodar_analise_dissertacao(
         if material_path:
             mat = Path(material_path)
             if mat.suffix.lower() == ".zip":
-                log("📦 Extraindo material de apoio do ZIP…", "etapa")
-                material = extrair_material_de_zip(mat, destino)
+                log("📦 Lendo arquivos do ZIP em memória…", "etapa")
+                material = extrair_material_de_zip(mat)
             else:
                 from verificador import ler_arquivo
                 texto = ler_arquivo(mat)
@@ -327,19 +329,14 @@ def _rodar_analise_dissertacao(
         elif drive_url:
             log("☁️ Baixando material de apoio do Google Drive…", "etapa")
             try:
-                caminho_drive = baixar_google_drive(
-                    drive_url,
-                    Path(tmpdir) / "drive_material",
-                    log_fn=log,
-                )
-                if caminho_drive.suffix.lower() == ".zip":
-                    log("📦 Extraindo ZIP baixado do Drive…", "etapa")
-                    material = extrair_material_de_zip(caminho_drive, destino)
+                drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url, log_fn=log)
+                if drive_ext.lower() == ".zip":
+                    log("📦 Lendo arquivos do ZIP em memória…", "etapa")
+                    material = extrair_material_de_zip(drive_bytes)
                 else:
-                    from verificador import ler_arquivo
-                    texto = ler_arquivo(caminho_drive)
+                    texto = _ler_bytes_apoio(drive_bytes, drive_ext)
                     if texto and len(texto) > 100:
-                        material = {caminho_drive.name: texto}
+                        material = {f"arquivo_drive{drive_ext}": texto}
                 log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
             except Exception as e:
                 log(f"   ⚠ Erro ao baixar do Drive: {e}", "warn")
