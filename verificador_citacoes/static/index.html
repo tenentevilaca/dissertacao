@@ -1189,11 +1189,12 @@ async function anlIniciarAnalise() {
   anlEstado.jobId = job_id;
   bar.style.width = '12%'; lbl.textContent = 'Processando…';
 
-  const sse = new EventSource(`/progresso-analise/${job_id}`);
   let nEtapas = 0;
+  let nLogs = 0;
+  let sseAtual = null;
+  let reconectando = false;
 
-  sse.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
+  function processarMsg(msg) {
     if (msg.tipo === 'etapa') {
       nEtapas++;
       bar.style.width = Math.min(90, 12 + nEtapas * 10) + '%';
@@ -1206,22 +1207,37 @@ async function anlIniciarAnalise() {
     } else if (msg.tipo === 'warn') {
       anlAdicionarLog(log, msg.msg, 'warn');
     } else if (msg.tipo === 'concluido') {
-      sse.close();
+      if (sseAtual) sseAtual.close();
       bar.style.width = '100%';
       lbl.textContent = '✓ Concluído!';
       anlAdicionarLog(log, '✓ ' + msg.msg, 'ok');
       document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
       setTimeout(() => anlMostrarRelatorio(msg.resumo, job_id), 800);
     } else if (msg.tipo === 'erro') {
-      sse.close();
+      if (sseAtual) sseAtual.close();
       bar.style.background = '#dc2626';
       lbl.textContent = 'Erro na análise';
       anlAdicionarLog(log, '✗ ' + msg.msg, 'erro');
       if (msg.detalhe) anlAdicionarLog(log, msg.detalhe, 'erro');
       document.getElementById('anl-btn-cancelar').style.display = 'inline-flex';
     }
-  };
-  sse.onerror = () => { sse.close(); anlAdicionarLog(log, 'Conexão interrompida.', 'warn'); };
+    nLogs++;
+  }
+
+  function conectarSSE() {
+    if (sseAtual) sseAtual.close();
+    sseAtual = new EventSource(`/progresso-analise/${job_id}?desde=${nLogs}`);
+    sseAtual.onmessage = (e) => { reconectando = false; processarMsg(JSON.parse(e.data)); };
+    sseAtual.onerror = () => {
+      sseAtual.close();
+      if (reconectando) return;
+      reconectando = true;
+      anlAdicionarLog(log, '⟳ Reconectando…', 'warn');
+      setTimeout(conectarSSE, 3000);
+    };
+  }
+
+  conectarSSE();
 }
 
 function anlMostrarRelatorio(resumo, jobId) {

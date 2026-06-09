@@ -84,6 +84,7 @@ async def iniciar_analise_dissertacao(
 
     _jobs[job_id] = {
         "queue": queue,
+        "logs": [],
         "tmpdir": tmpdir,
         "status": "aguardando",
         "relatorio_dir": None,
@@ -114,13 +115,32 @@ async def iniciar_analise_dissertacao(
     return {"job_id": job_id}
 
 
+@app.get("/status-analise/{job_id}")
+async def status_analise(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    job = _jobs[job_id]
+    return {
+        "status": job["status"],
+        "logs": job["logs"],
+        "relatorio_dir": job.get("relatorio_dir"),
+    }
+
+
 @app.get("/progresso-analise/{job_id}")
-async def progresso_analise(job_id: str):
+async def progresso_analise(job_id: str, desde: int = 0):
     if job_id not in _jobs:
         raise HTTPException(404, "Job não encontrado")
 
     async def _stream():
-        queue = _jobs[job_id]["queue"]
+        job = _jobs[job_id]
+        # Envia logs já acumulados (reconexão)
+        for msg in job["logs"][desde:]:
+            yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+            if msg.get("tipo") in ("concluido", "erro"):
+                return
+        # Continua com novos eventos da fila
+        queue = job["queue"]
         while True:
             msg = await queue.get()
             yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
@@ -278,7 +298,9 @@ def _rodar_analise_dissertacao(
     _jobs[job_id]["status"] = "rodando"
 
     def log(msg: str, tipo: str = "info"):
-        _enviar(loop, queue, {"tipo": tipo, "msg": msg})
+        evento = {"tipo": tipo, "msg": msg}
+        _jobs[job_id]["logs"].append(evento)
+        _enviar(loop, queue, evento)
 
     try:
         if api_key.strip():
