@@ -525,16 +525,57 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         Arquivo da Dissertação
       </h2>
       <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
-        Carregue o <strong>.docx</strong> da sua dissertação. A IA irá extrair automaticamente
-        metadados (autor, título, programa) e identificar os capítulos.
+        Carregue o <strong>.docx</strong> da sua dissertação ou cole um link do Google Drive.
+        A IA irá extrair automaticamente metadados (autor, título, programa) e identificar os capítulos.
       </p>
-      <div class="dropzone" id="anl-drop-diss">
-        <input type="file" id="anl-file-diss" accept=".docx" onchange="anlSelecionarDiss(this)">
-        <div class="icon">📄</div>
-        <strong>Clique ou arraste o arquivo aqui</strong>
-        <p>Formato aceito: <code>.docx</code> (Word)</p>
+
+      <!-- Seletor de origem da dissertação -->
+      <div style="display:flex;gap:0;border:1px solid var(--borda);border-radius:10px;overflow:hidden;margin-bottom:20px;">
+        <button id="anl-tab-diss-upload" onclick="anlTrocarOrigemDiss('upload')"
+          style="flex:1;padding:12px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;
+                 background:var(--azul);color:#fff;transition:background .2s">
+          📄 Enviar arquivo (.docx)
+        </button>
+        <button id="anl-tab-diss-drive" onclick="anlTrocarOrigemDiss('drive')"
+          style="flex:1;padding:12px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;
+                 background:#f1f5f9;color:var(--cinza);transition:background .2s">
+          ☁️ Link do Google Drive
+        </button>
       </div>
-      <div id="anl-badge-diss"></div>
+
+      <!-- Painel upload -->
+      <div id="anl-painel-diss-upload">
+        <div class="dropzone" id="anl-drop-diss">
+          <input type="file" id="anl-file-diss" accept=".docx" onchange="anlSelecionarDiss(this)">
+          <div class="icon">📄</div>
+          <strong>Clique ou arraste o arquivo aqui</strong>
+          <p>Formato aceito: <code>.docx</code> (Word) · Limite: <strong>1 GB</strong></p>
+        </div>
+        <div id="anl-badge-diss"></div>
+      </div>
+
+      <!-- Painel Drive dissertação -->
+      <div id="anl-painel-diss-drive" style="display:none">
+        <div style="background:#f0f9ff;border-radius:10px;padding:20px;border:1px solid #bae6fd">
+          <label style="font-weight:700;font-size:.88rem;color:#0369a1;display:block;margin-bottom:10px">
+            🔗 Cole o link de compartilhamento do Google Drive:
+          </label>
+          <input type="text" id="anl-diss-drive-url"
+            placeholder="https://drive.google.com/file/d/…/view?usp=sharing"
+            style="width:100%;padding:10px 14px;border:1px solid #7dd3fc;border-radius:8px;font-size:.9rem;background:#fff"
+            oninput="anlValidarDissDriveUrl()">
+          <div id="anl-diss-drive-status" style="margin-top:8px;font-size:.8rem;"></div>
+        </div>
+        <div style="margin-top:12px;background:#fff7ed;border-radius:8px;padding:14px;border:1px solid #fed7aa;font-size:.83rem;color:#9a3412">
+          <b>⚠ O arquivo precisa estar público no Drive:</b><br>
+          <ol style="margin:8px 0 0 16px;line-height:1.9">
+            <li>Botão direito no arquivo .docx → <b>"Compartilhar"</b></li>
+            <li>Em "Acesso geral" mude para <b>"Qualquer pessoa com o link"</b></li>
+            <li>Clique em <b>"Copiar link"</b> e cole acima</li>
+          </ol>
+        </div>
+      </div>
+
       <div class="btn-row">
         <button class="btn btn-primary" onclick="anlIrPara(2)" id="anl-btn-1" disabled>Próximo →</button>
       </div>
@@ -941,7 +982,7 @@ function reiniciarVerif() {
 // ANALISADOR DE DISSERTAÇÃO
 // ════════════════════════════════════════════════════════════════════
 
-const anlEstado = { passo: 1, fileDiss: null, fileMat: null, driveUrl: '', jobId: null };
+const anlEstado = { passo: 1, fileDiss: null, dissDriveUrl: '', fileMat: null, driveUrl: '', jobId: null };
 
 function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
@@ -974,7 +1015,47 @@ function anlRemoverDiss() {
   anlEstado.fileDiss = null;
   document.getElementById('anl-badge-diss').innerHTML = '';
   document.getElementById('anl-file-diss').value = '';
+  if (!anlEstado.dissDriveUrl) document.getElementById('anl-btn-1').disabled = true;
+}
+
+function anlTrocarOrigemDiss(origem) {
+  const tabUp = document.getElementById('anl-tab-diss-upload');
+  const tabDr = document.getElementById('anl-tab-diss-drive');
+  const painelUp = document.getElementById('anl-painel-diss-upload');
+  const painelDr = document.getElementById('anl-painel-diss-drive');
+  if (origem === 'upload') {
+    tabUp.style.background = 'var(--azul)'; tabUp.style.color = '#fff';
+    tabDr.style.background = '#f1f5f9';     tabDr.style.color = 'var(--cinza)';
+    painelUp.style.display = 'block';
+    painelDr.style.display = 'none';
+    anlEstado.dissDriveUrl = '';
+    document.getElementById('anl-btn-1').disabled = !anlEstado.fileDiss;
+  } else {
+    tabDr.style.background = 'var(--azul)'; tabDr.style.color = '#fff';
+    tabUp.style.background = '#f1f5f9';     tabUp.style.color = 'var(--cinza)';
+    painelDr.style.display = 'block';
+    painelUp.style.display = 'none';
+    anlEstado.fileDiss = null;
+    document.getElementById('anl-btn-1').disabled = !anlEstado.dissDriveUrl;
+  }
+}
+
+function anlValidarDissDriveUrl() {
+  const url = document.getElementById('anl-diss-drive-url').value.trim();
+  const status = document.getElementById('anl-diss-drive-status');
+  anlEstado.dissDriveUrl = '';
   document.getElementById('anl-btn-1').disabled = true;
+  if (!url) { status.innerHTML = ''; return; }
+  const ok = /drive\.google\.com\/(file\/d\/|.*[?&]id=)/.test(url);
+  if (ok) {
+    const m = url.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+    const id = m ? m[1] : '—';
+    status.innerHTML = `<span style="color:var(--verde)">✓ Link válido — ID: ${id}</span>`;
+    anlEstado.dissDriveUrl = url;
+    document.getElementById('anl-btn-1').disabled = false;
+  } else {
+    status.innerHTML = `<span style="color:var(--vermelho)">✗ Não parece um link do Google Drive.</span>`;
+  }
 }
 
 function anlSelecionarMat(input) {
@@ -1080,7 +1161,13 @@ async function anlIniciarAnalise() {
   bar.style.width = '8%'; lbl.textContent = 'Enviando…';
 
   const form = new FormData();
-  form.append('dissertacao', anlEstado.fileDiss, anlEstado.fileDiss.name);
+  if (anlEstado.fileDiss) {
+    form.append('dissertacao', anlEstado.fileDiss, anlEstado.fileDiss.name);
+  } else {
+    // Arquivo vazio placeholder — o servidor vai usar a URL do Drive
+    form.append('dissertacao', new Blob([''], {type:'application/octet-stream'}), '_drive_placeholder.docx');
+  }
+  if (anlEstado.dissDriveUrl) form.append('dissertacao_drive_url', anlEstado.dissDriveUrl);
   if (anlEstado.fileMat) form.append('material_apoio', anlEstado.fileMat, anlEstado.fileMat.name);
   if (anlEstado.driveUrl) form.append('material_drive_url', anlEstado.driveUrl);
   form.append('api_key', document.getElementById('anl-apikey').value.trim());

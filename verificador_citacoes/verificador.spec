@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec para VerificadorCitacoes.exe
+# PyInstaller spec para FerramentasAcademicas.exe
 
 block_cipher = None
 
@@ -9,7 +9,10 @@ a = Analysis(
     binaries=[],
     datas=[
         ('static',  'static'),   # interface web
-        ('modules', 'modules'),  # módulos Python
+        ('modules', 'modules'),  # módulos auxiliares
+        ('analisador.py', '.'), # analisador de dissertação
+        ('verificador.py', '.'), # verificador de citações
+        ('config.py', '.'),
     ],
     hiddenimports=[
         # uvicorn
@@ -29,8 +32,10 @@ a = Analysis(
         'starlette',
         'starlette.routing',
         'starlette.middleware',
+        'starlette.middleware.base',
         'starlette.responses',
         'starlette.requests',
+        'starlette.datastructures',
         # async
         'anyio',
         'anyio._backends._asyncio',
@@ -39,6 +44,9 @@ a = Analysis(
         'anthropic',
         'httpx',
         'httpcore',
+        # requests (usado pelo download do Google Drive)
+        'requests',
+        'urllib3',
         # docx
         'docx',
         'lxml',
@@ -47,6 +55,7 @@ a = Analysis(
         'fitz',
         # outros
         'multipart',
+        'dotenv',
         'email.mime',
         'email.mime.multipart',
     ],
@@ -69,14 +78,14 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='VerificadorCitacoes',
+    name='FerramentasAcademicas',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,       # janela de terminal visível (mostra progresso)
+    console=True,       # janela de terminal mostra progresso da análise
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

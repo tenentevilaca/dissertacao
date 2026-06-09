@@ -73,6 +73,7 @@ async def icon(size: str):
 @app.post("/iniciar-analise-dissertacao")
 async def iniciar_analise_dissertacao(
     dissertacao: UploadFile = File(...),
+    dissertacao_drive_url: str = Form(""),
     material_apoio: Optional[UploadFile] = File(None),
     material_drive_url: str = Form(""),
     api_key: str = Form(""),
@@ -89,8 +90,11 @@ async def iniciar_analise_dissertacao(
         "tipo": "analise",
     }
 
+    diss_bytes = await dissertacao.read()
     diss_path = Path(tmpdir) / dissertacao.filename
-    diss_path.write_bytes(await dissertacao.read())
+    diss_path.write_bytes(diss_bytes)
+
+    diss_drive = dissertacao_drive_url.strip() if dissertacao_drive_url else ""
 
     material_path: Optional[str] = None
     if material_apoio and material_apoio.filename:
@@ -103,7 +107,7 @@ async def iniciar_analise_dissertacao(
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise_dissertacao,
-        args=(job_id, str(diss_path), material_path, drive_url, api_key, loop),
+        args=(job_id, str(diss_path), diss_drive, material_path, drive_url, api_key, loop),
         daemon=True,
     ).start()
 
@@ -263,6 +267,7 @@ def _enviar(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, msg: dict):
 def _rodar_analise_dissertacao(
     job_id: str,
     diss_path: str,
+    diss_drive_url: str,
     material_path: Optional[str],
     drive_url: str,
     api_key: str,
@@ -286,6 +291,21 @@ def _rodar_analise_dissertacao(
             gerar_relatorio_analise,
             baixar_google_drive,
         )
+
+        # Baixa dissertação do Drive se necessário
+        diss_final = Path(diss_path)
+        if diss_drive_url:
+            log("☁️ Baixando dissertação do Google Drive…", "etapa")
+            try:
+                diss_final = baixar_google_drive(
+                    diss_drive_url,
+                    Path(tmpdir) / "dissertacao_drive",
+                    log_fn=log,
+                )
+                log(f"   ✓ Dissertação baixada: {diss_final.name}")
+            except Exception as e:
+                log(f"   ✗ Erro ao baixar dissertação do Drive: {e}", "erro")
+                raise
 
         # Carrega material de apoio
         material: dict[str, str] = {}
@@ -326,7 +346,7 @@ def _rodar_analise_dissertacao(
                 log("   Continuando sem material de apoio…", "warn")
 
         resultado = analisar_dissertacao(
-            diss_path=diss_path,
+            diss_path=str(diss_final),
             material=material,
             api_key=api_key,
             log_fn=log,
