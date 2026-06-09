@@ -74,6 +74,7 @@ async def icon(size: str):
 async def iniciar_analise_dissertacao(
     dissertacao: UploadFile = File(...),
     material_apoio: Optional[UploadFile] = File(None),
+    material_drive_url: str = Form(""),
     api_key: str = Form(""),
 ):
     job_id = str(uuid.uuid4())
@@ -97,10 +98,12 @@ async def iniciar_analise_dissertacao(
         mat_path.write_bytes(await material_apoio.read())
         material_path = str(mat_path)
 
+    drive_url = material_drive_url.strip() if material_drive_url else ""
+
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise_dissertacao,
-        args=(job_id, str(diss_path), material_path, api_key, loop),
+        args=(job_id, str(diss_path), material_path, drive_url, api_key, loop),
         daemon=True,
     ).start()
 
@@ -261,6 +264,7 @@ def _rodar_analise_dissertacao(
     job_id: str,
     diss_path: str,
     material_path: Optional[str],
+    drive_url: str,
     api_key: str,
     loop: asyncio.AbstractEventLoop,
 ):
@@ -280,23 +284,46 @@ def _rodar_analise_dissertacao(
             extrair_material_de_zip,
             carregar_material_de_pasta,
             gerar_relatorio_analise,
+            baixar_google_drive,
         )
 
         # Carrega material de apoio
         material: dict[str, str] = {}
+        destino = Path(tmpdir) / "material_extraido"
+
+        # Prioridade: arquivo enviado > URL do Drive
         if material_path:
             mat = Path(material_path)
-            destino = Path(tmpdir) / "material_extraido"
             if mat.suffix.lower() == ".zip":
                 log("📦 Extraindo material de apoio do ZIP…", "etapa")
                 material = extrair_material_de_zip(mat, destino)
             else:
-                # Arquivo único — trata como material avulso
                 from verificador import ler_arquivo
                 texto = ler_arquivo(mat)
                 if texto and len(texto) > 100:
                     material = {mat.name: texto}
             log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
+
+        elif drive_url:
+            log("☁️ Baixando material de apoio do Google Drive…", "etapa")
+            try:
+                caminho_drive = baixar_google_drive(
+                    drive_url,
+                    Path(tmpdir) / "drive_material",
+                    log_fn=log,
+                )
+                if caminho_drive.suffix.lower() == ".zip":
+                    log("📦 Extraindo ZIP baixado do Drive…", "etapa")
+                    material = extrair_material_de_zip(caminho_drive, destino)
+                else:
+                    from verificador import ler_arquivo
+                    texto = ler_arquivo(caminho_drive)
+                    if texto and len(texto) > 100:
+                        material = {caminho_drive.name: texto}
+                log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
+            except Exception as e:
+                log(f"   ⚠ Erro ao baixar do Drive: {e}", "warn")
+                log("   Continuando sem material de apoio…", "warn")
 
         resultado = analisar_dissertacao(
             diss_path=diss_path,

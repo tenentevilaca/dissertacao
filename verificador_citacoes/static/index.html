@@ -549,22 +549,75 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         Material de Apoio (opcional)
       </h2>
       <p style="margin-bottom:16px;color:var(--cinza);font-size:.88rem;">
-        Carregue um <strong>arquivo .zip</strong> com os PDFs/docx das obras que embasam
-        a dissertação. A IA irá buscar trechos que <em>validam, complementam ou contradizem</em>
-        os argumentos de cada capítulo. Se não tiver, avance sem carregar.
+        Forneça os PDFs/docx das obras que embasam a dissertação. A IA irá buscar trechos que
+        <em>validam, complementam ou contradizem</em> os argumentos de cada capítulo.
+        Escolha como prefere enviar:
       </p>
-      <div class="dropzone" id="anl-drop-mat">
-        <input type="file" id="anl-file-mat" accept=".zip" onchange="anlSelecionarMat(this)">
-        <div class="icon">🗜️</div>
-        <strong>Clique ou arraste o arquivo .zip aqui</strong>
-        <p>Um único arquivo ZIP contendo PDF/docx/txt das obras</p>
+
+      <!-- Seletor de origem -->
+      <div style="display:flex;gap:0;border:1px solid var(--borda);border-radius:10px;overflow:hidden;margin-bottom:20px;">
+        <button id="anl-tab-upload" onclick="anlTrocarOrigemMat('upload')"
+          style="flex:1;padding:12px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;
+                 background:var(--azul);color:#fff;transition:background .2s">
+          📁 Enviar arquivo (.zip)
+        </button>
+        <button id="anl-tab-drive" onclick="anlTrocarOrigemMat('drive')"
+          style="flex:1;padding:12px;border:none;cursor:pointer;font-weight:700;font-size:.85rem;
+                 background:#f1f5f9;color:var(--cinza);transition:background .2s">
+          ☁️ Link do Google Drive
+        </button>
       </div>
-      <div id="anl-badge-mat"></div>
-      <div style="margin-top:14px;padding:12px 16px;background:#fffbeb;border-radius:8px;font-size:.82rem;color:#92400e;border:1px solid #fcd34d">
-        💡 <strong>Dica:</strong> Comprima a pasta inteira de artigos e livros em um só .zip.
-        Suportado: PDF, DOCX, TXT. Tamanho recomendado: até 150 MB.
+
+      <!-- Painel: upload -->
+      <div id="anl-painel-upload">
+        <div class="dropzone" id="anl-drop-mat">
+          <input type="file" id="anl-file-mat" accept=".zip,.pdf,.docx,.txt" onchange="anlSelecionarMat(this)">
+          <div class="icon">🗜️</div>
+          <strong>Clique ou arraste o arquivo aqui</strong>
+          <p>ZIP (recomendado para múltiplos arquivos) · PDF · DOCX · TXT</p>
+          <p style="margin-top:4px">Limite: <strong>1 GB</strong></p>
+        </div>
+        <div id="anl-badge-mat"></div>
+        <div style="margin-top:12px;padding:12px;background:#fffbeb;border-radius:8px;font-size:.82rem;color:#92400e;border:1px solid #fcd34d">
+          💡 <strong>Como criar o ZIP:</strong>
+          Selecione todos os PDFs da sua pasta de obras →
+          Botão direito → "Compactar" (Mac) ou "Compactar em arquivo ZIP" (Windows 11) ou "Enviar para → Pasta compactada" (Windows 10).
+        </div>
       </div>
-      <div class="btn-row">
+
+      <!-- Painel: Google Drive -->
+      <div id="anl-painel-drive" style="display:none">
+        <div style="background:#f0f9ff;border-radius:10px;padding:20px;border:1px solid #bae6fd">
+          <label style="font-weight:700;font-size:.88rem;color:#0369a1;display:block;margin-bottom:10px">
+            🔗 Cole o link de compartilhamento do Google Drive:
+          </label>
+          <input type="text" id="anl-drive-url"
+            placeholder="https://drive.google.com/file/d/…/view?usp=sharing"
+            style="width:100%;padding:10px 14px;border:1px solid #7dd3fc;border-radius:8px;font-size:.9rem;background:#fff"
+            oninput="anlValidarDriveUrl()">
+          <div id="anl-drive-status" style="margin-top:8px;font-size:.8rem;"></div>
+        </div>
+
+        <div style="margin-top:16px;background:#fff7ed;border-radius:8px;padding:14px;border:1px solid #fed7aa;font-size:.83rem;color:#9a3412">
+          <b>⚠ Importante — antes de colar o link:</b><br>
+          <ol style="margin:8px 0 0 16px;line-height:1.9">
+            <li>Abra o Google Drive</li>
+            <li>Clique com botão direito no arquivo ZIP (ou PDF) → <b>"Compartilhar"</b></li>
+            <li>Em "Acesso geral", mude para <b>"Qualquer pessoa com o link"</b></li>
+            <li>Clique em <b>"Copiar link"</b> e cole no campo acima</li>
+          </ol>
+          <div style="margin-top:8px;padding:8px;background:#fef3c7;border-radius:6px">
+            📌 Arquivos <b>privados</b> (padrão) não funcionam — o compartilhamento precisa estar <b>público</b>.
+          </div>
+        </div>
+
+        <div style="margin-top:12px;background:#f0fdf4;border-radius:8px;padding:12px;border:1px solid #bbf7d0;font-size:.82rem;color:#166534">
+          ✅ <b>Vantagem:</b> Não precisa fazer upload — o servidor baixa diretamente do Drive.
+          Ideal para pastas grandes (até 1 GB).
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:20px">
         <button class="btn btn-outline" onclick="anlIrPara(1)">← Voltar</button>
         <button class="btn btn-primary" onclick="anlIrPara(3)">Próximo →</button>
       </div>
@@ -888,7 +941,7 @@ function reiniciarVerif() {
 // ANALISADOR DE DISSERTAÇÃO
 // ════════════════════════════════════════════════════════════════════
 
-const anlEstado = { passo: 1, fileDiss: null, fileMat: null, jobId: null };
+const anlEstado = { passo: 1, fileDiss: null, fileMat: null, driveUrl: '', jobId: null };
 
 function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
@@ -934,6 +987,42 @@ function anlRemoverMat() {
   anlEstado.fileMat = null;
   document.getElementById('anl-badge-mat').innerHTML = '';
   document.getElementById('anl-file-mat').value = '';
+}
+
+function anlTrocarOrigemMat(origem) {
+  const tabUp = document.getElementById('anl-tab-upload');
+  const tabDr = document.getElementById('anl-tab-drive');
+  const painelUp = document.getElementById('anl-painel-upload');
+  const painelDr = document.getElementById('anl-painel-drive');
+  if (origem === 'upload') {
+    tabUp.style.background = 'var(--azul)'; tabUp.style.color = '#fff';
+    tabDr.style.background = '#f1f5f9';     tabDr.style.color = 'var(--cinza)';
+    painelUp.style.display = 'block';
+    painelDr.style.display = 'none';
+    anlEstado.driveUrl = '';
+  } else {
+    tabDr.style.background = 'var(--azul)'; tabDr.style.color = '#fff';
+    tabUp.style.background = '#f1f5f9';     tabUp.style.color = 'var(--cinza)';
+    painelDr.style.display = 'block';
+    painelUp.style.display = 'none';
+    anlEstado.fileMat = null;
+  }
+}
+
+function anlValidarDriveUrl() {
+  const url = document.getElementById('anl-drive-url').value.trim();
+  const status = document.getElementById('anl-drive-status');
+  anlEstado.driveUrl = '';
+  if (!url) { status.innerHTML = ''; return; }
+  const ok = /drive\.google\.com\/(file\/d\/|.*[?&]id=)/.test(url);
+  if (ok) {
+    const m = url.match(/\/d\/([a-zA-Z0-9_-]{10,})/);
+    const id = m ? m[1] : '—';
+    status.innerHTML = `<span style="color:var(--verde)">✓ Link válido — ID: ${id}</span>`;
+    anlEstado.driveUrl = url;
+  } else {
+    status.innerHTML = `<span style="color:var(--vermelho)">✗ Não parece um link do Google Drive. Use o link de compartilhamento.</span>`;
+  }
 }
 
 function anlValidarConfig() {
@@ -993,6 +1082,7 @@ async function anlIniciarAnalise() {
   const form = new FormData();
   form.append('dissertacao', anlEstado.fileDiss, anlEstado.fileDiss.name);
   if (anlEstado.fileMat) form.append('material_apoio', anlEstado.fileMat, anlEstado.fileMat.name);
+  if (anlEstado.driveUrl) form.append('material_drive_url', anlEstado.driveUrl);
   form.append('api_key', document.getElementById('anl-apikey').value.trim());
 
   let resp;
@@ -1084,17 +1174,22 @@ function anlMostrarRelatorio(resumo, jobId) {
 
 function anlReiniciar() {
   if (anlEstado.jobId) fetch('/job/' + anlEstado.jobId, { method: 'DELETE' }).catch(() => {});
-  anlEstado.fileDiss = null; anlEstado.fileMat = null; anlEstado.jobId = null;
+  anlEstado.fileDiss = null; anlEstado.fileMat = null; anlEstado.driveUrl = ''; anlEstado.jobId = null;
   document.getElementById('anl-badge-diss').innerHTML = '';
   document.getElementById('anl-badge-mat').innerHTML = '';
   document.getElementById('anl-file-diss').value = '';
   document.getElementById('anl-file-mat').value = '';
+  const driveInput = document.getElementById('anl-drive-url');
+  if (driveInput) driveInput.value = '';
+  const driveStatus = document.getElementById('anl-drive-status');
+  if (driveStatus) driveStatus.innerHTML = '';
   document.getElementById('anl-apikey').value = '';
   document.getElementById('anl-btn-1').disabled = true;
   document.getElementById('anl-btn-3').disabled = true;
   document.getElementById('anl-prog-bar').style.width = '0%';
   document.getElementById('anl-prog-bar').style.background = '';
   document.getElementById('anl-log-box').innerHTML = '';
+  anlTrocarOrigemMat('upload');
   anlIrPara(1);
 }
 </script>
