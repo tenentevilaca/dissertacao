@@ -41,88 +41,63 @@ def _extrair_id_drive(url: str) -> str:
 
 def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
     """
-    Baixa um arquivo público do Google Drive para o caminho indicado.
-    Lida com a página de confirmação para arquivos grandes.
+    Baixa um arquivo público do Google Drive usando httpx (já incluído via anthropic).
     Retorna o caminho do arquivo salvo.
     """
-    import requests
+    import httpx
 
     file_id = _extrair_id_drive(url)
     if log_fn:
         log_fn(f"   ID do arquivo: {file_id}")
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
-
+    headers = {"User-Agent": "Mozilla/5.0"}
     base_url = "https://drive.google.com/uc"
     params = {"export": "download", "id": file_id}
 
     if log_fn:
         log_fn("   Conectando ao Google Drive…")
 
-    resp = session.get(base_url, params=params, stream=True, timeout=60)
+    with httpx.Client(headers=headers, follow_redirects=True, timeout=300) as client:
+        resp = client.get(base_url, params=params)
 
-    # Arquivo grande: Drive retorna HTML com página de confirmação
-    content_type = resp.headers.get("Content-Type", "")
-    if "text/html" in content_type:
-        if log_fn:
-            log_fn("   Arquivo grande — obtendo token de confirmação…")
-
-        # Tenta extrair token do cookie download_warning
-        token = None
-        for k, v in resp.cookies.items():
-            if "download_warning" in k:
-                token = v
-                break
-
-        # Se não achou no cookie, procura no HTML (novo formato do Drive)
-        if not token:
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" in content_type:
+            if log_fn:
+                log_fn("   Arquivo grande — obtendo token de confirmação…")
             m = re.search(r'name="uuid"\s+value="([^"]+)"', resp.text)
             uuid = m.group(1) if m else None
             m2 = re.search(r'action="([^"]+confirm[^"]+)"', resp.text)
             if m2 and uuid:
                 confirm_url = m2.group(1).replace("&amp;", "&")
-                resp = session.post(confirm_url, data={"uuid": uuid}, stream=True, timeout=120)
+                resp = client.post(confirm_url, data={"uuid": uuid})
             else:
-                # Fallback: adiciona confirm=t (funciona para muitos casos)
                 params["confirm"] = "t"
-                resp = session.get(base_url, params=params, stream=True, timeout=120)
-        else:
-            params["confirm"] = token
-            resp = session.get(base_url, params=params, stream=True, timeout=120)
+                resp = client.get(base_url, params=params)
 
-    resp.raise_for_status()
+        resp.raise_for_status()
 
-    # Detecta extensão pelo Content-Disposition ou Content-Type
-    ext = ".zip"
-    cd = resp.headers.get("Content-Disposition", "")
-    m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
-    if m_cd:
-        nome_drive = m_cd.group(1).strip()
-        ext = Path(nome_drive).suffix or ext
-    elif "pdf" in content_type:
-        ext = ".pdf"
-    elif "msword" in content_type or "wordprocessing" in content_type:
-        ext = ".docx"
+        ext = ".zip"
+        cd = resp.headers.get("Content-Disposition", "")
+        m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
+        if m_cd:
+            ext = Path(m_cd.group(1).strip()).suffix or ext
+        elif "pdf" in content_type:
+            ext = ".pdf"
+        elif "msword" in content_type or "wordprocessing" in content_type:
+            ext = ".docx"
 
-    caminho_final = destino.with_suffix(ext)
+        caminho_final = destino.with_suffix(ext)
+        if log_fn:
+            log_fn(f"   Salvando como {caminho_final.name}…")
 
-    if log_fn:
-        log_fn(f"   Salvando como {caminho_final.name}…")
+        with open(caminho_final, "wb") as f:
+            f.write(resp.content)
 
-    total = 0
-    with open(caminho_final, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            if chunk:
-                f.write(chunk)
-                total += len(chunk)
-                if log_fn and total % (10 * 1024 * 1024) < 65536:  # a cada ~10 MB
-                    log_fn(f"   {total // (1024*1024)} MB baixados…")
+        total = len(resp.content)
+        if log_fn:
+            log_fn(f"   Download concluido: {total/(1024*1024):.1f} MB -> {caminho_final.name}")
 
-    if log_fn:
-        log_fn(f"   ✓ Download concluído: {total/(1024*1024):.1f} MB → {caminho_final.name}")
-
-    return caminho_final
+        return caminho_final
 
 
 # ════════════════════════════════════════════════════════════════════════
