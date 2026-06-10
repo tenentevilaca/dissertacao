@@ -11,6 +11,13 @@ from pathlib import Path
 
 PORTA = 8000
 
+# Garante que as mensagens apareçam imediatamente no terminal (sem buffer)
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 # ── Detecta se está rodando como executável empacotado ──────────────────
 FROZEN = getattr(sys, "frozen", False)
 
