@@ -298,18 +298,15 @@ def detectar_capitulos(texto: str) -> list[tuple[str, str]]:
                            and bool(_RE_TITULO_CURTO.match(stripped))
                            and len(stripped.split()) >= 2)
 
-        # Entradas de sumário (TOC): título seguido de número de página colado
-        # ao final (ex.: "4.4 Policiamento Orientado pela Inteligência68")
-        e_entrada_toc = bool(re.search(r"[^\s.\d]\d{1,4}$", stripped))
+        # Entradas de sumário (TOC): linha termina em número de página
+        # (colado ao título ou separado por espaço/tabulação)
+        e_entrada_toc = bool(re.search(r"\d{1,4}$", stripped))
 
-        # Bloco de sumário ainda em curso: ignora cortes próximos ao cabeçalho
-        # SUMÁRIO/ÍNDICE, pois são entradas de TOC fora da ordem do corpo
-        if sumario_idx is not None and (i - sumario_idx) < 200:
-            if e_cap_explicito or e_titulo_curto:
+        # Bloco de sumário ainda em curso: ignora cortes dentro do TOC,
+        # pois suas entradas são referências fora da ordem do corpo
+        if sumario_idx is not None and (i - sumario_idx) < 1000:
+            if e_cap_explicito or e_titulo_curto or e_entrada_toc:
                 continue
-
-        if e_entrada_toc:
-            continue
 
         if e_cap_explicito:
             cortes.append((i, stripped))
