@@ -430,10 +430,15 @@ def carregar_material_de_pasta(pasta: Path) -> dict[str, str]:
 # CHAMADAS AO CLAUDE
 # ════════════════════════════════════════════════════════════════════════
 
-def _chamar_claude(client: anthropic.Anthropic, prompt: str, max_tokens: int = 4096) -> dict:
+def _chamar_claude(
+    client: anthropic.Anthropic,
+    prompt: str,
+    max_tokens: int = 4096,
+    model: str = "claude-sonnet-4-6",
+) -> dict:
     """Chama o Claude e parseia o JSON retornado."""
     resp = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=model,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -1114,7 +1119,7 @@ def gerar_mapa_semantico(capitulos: list[tuple[str, str]], api_key: str, log_fn=
         trecho = conteudo[:_MAX_CHARS_CAP]
         prompt = _PROMPT_MAPA.format(titulo_cap=titulo_cap, texto_cap=trecho, n_chars=len(trecho))
         try:
-            resumo = _chamar_claude(client, prompt, max_tokens=1000)
+            resumo = _chamar_claude(client, prompt, max_tokens=1000, model="claude-haiku-4-5")
         except Exception as e:
             resumo = {"_erro": str(e)}
         resumo["titulo"] = titulo_cap
