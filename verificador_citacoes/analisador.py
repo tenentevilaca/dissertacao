@@ -276,12 +276,19 @@ def detectar_capitulos(texto: str) -> list[tuple[str, str]]:
     paragrafos = texto.split("\n")
     cortes: list[tuple[int, str]] = []  # (idx_paragrafo, titulo)
 
+    sumario_idx: int | None = None  # marca início de bloco SUMÁRIO/ÍNDICE (TOC)
+
     for i, p in enumerate(paragrafos):
         stripped = p.strip()
         if not stripped or len(stripped) > 90:
+            # parágrafo de prosa real encerra qualquer bloco de sumário em curso
+            if stripped and len(stripped) > 90:
+                sumario_idx = None
             continue
         upper = stripped.upper()
         if upper in _SECOES_IGNORAR:
+            if upper in {"SUMÁRIO", "SUMARIO", "ÍNDICE", "INDICE"}:
+                sumario_idx = i
             continue
 
         e_cap_explicito = bool(_RE_CAP.match(stripped))
@@ -289,12 +296,27 @@ def detectar_capitulos(texto: str) -> list[tuple[str, str]]:
                            and bool(_RE_TITULO_CURTO.match(stripped))
                            and len(stripped.split()) >= 2)
 
+        # Entradas de sumário (TOC): título seguido de número de página colado
+        # ao final (ex.: "4.4 Policiamento Orientado pela Inteligência68")
+        e_entrada_toc = bool(re.search(r"[^\s.\d]\d{1,4}$", stripped))
+
+        # Bloco de sumário ainda em curso: ignora cortes próximos ao cabeçalho
+        # SUMÁRIO/ÍNDICE, pois são entradas de TOC fora da ordem do corpo
+        if sumario_idx is not None and (i - sumario_idx) < 200:
+            if e_cap_explicito or e_titulo_curto:
+                continue
+
+        if e_entrada_toc:
+            continue
+
         if e_cap_explicito:
             cortes.append((i, stripped))
+            sumario_idx = None
         elif e_titulo_curto:
             # Só inclui se distante 15+ linhas do último corte
             if not cortes or (i - cortes[-1][0]) >= 15:
                 cortes.append((i, stripped))
+                sumario_idx = None
 
     if not cortes:
         return [("Dissertação Completa", texto[:_MAX_CHARS_CAP])]
