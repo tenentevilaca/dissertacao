@@ -1259,7 +1259,14 @@ function anlMostrarRelatorio(resumo, jobId) {
     `<div class="stat-card ${s.cls}"><strong>${s.val}</strong><span>${s.label}</span></div>`
   ).join('');
 
+  const docxBtn = resumo.docx_disponivel
+    ? `<a class="dl-btn dl-html" style="background:#1a3a5c;color:#fff" href="/dissertacao-revisada/${jobId}" download>
+         📝 Baixar Dissertação Revisada (.docx)
+       </a>`
+    : '';
+
   document.getElementById('anl-download-row').innerHTML = `
+    ${docxBtn}
     <a class="dl-btn dl-html" href="/relatorio-analise/${jobId}/html" target="_blank">
       🌐 Relatório HTML (abrir)
     </a>

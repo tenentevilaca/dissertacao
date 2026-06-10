@@ -194,7 +194,7 @@ Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
 Onde "avaliacao"/"status"/"pontuacao_geral" usam apenas: APROVADO | APROVADO_COM_RESSALVAS | REQUER_REVISAO | ADEQUADA | INSUFICIENTE | AUSENTE | INTEGRADA | PARCIAL | OK | COM_PROBLEMAS
 """
 
-_PROMPT_APOIO = """Você é um assistente de pesquisa acadêmica ajudando a validar argumentos de uma dissertação.
+_PROMPT_APOIO = """Você é um assistente de pesquisa acadêmica fazendo VERIFICAÇÃO DE CONSONÂNCIA SEMÂNTICA entre uma dissertação e suas obras de apoio.
 
 CAPÍTULO: «{titulo_cap}»
 
@@ -203,12 +203,15 @@ TRECHO DO CAPÍTULO QUE PRECISA DE VALIDAÇÃO:
 {trecho_cap}
 \"\"\"
 
-TRECHOS DO MATERIAL DE APOIO DISPONÍVEL:
+TRECHOS DAS OBRAS DE APOIO DISPONÍVEIS (com nome do arquivo de origem):
 \"\"\"
 {trechos_apoio}
 \"\"\"
 
-Analise se os trechos do material de apoio sustentam, contradizem ou complementam os argumentos do capítulo.
+Para cada citação ou argumento do capítulo que se relacione com as obras de apoio, avalie:
+(a) FIDELIDADE — o capítulo reproduz corretamente o argumento da fonte?
+(b) ATRIBUIÇÃO — o conteúdo é da autoria indicada ou de outra fonte?
+(c) DIREÇÃO ARGUMENTATIVA — a fonte sustenta o argumento ou o contradiz?
 
 Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
 {{
@@ -217,8 +220,10 @@ Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
       "argumento_dissertacao": "argumento ou afirmação do capítulo (cite diretamente)",
       "trecho_apoio": "trecho exato do material que se relaciona (até 300 chars)",
       "arquivo_fonte": "nome do arquivo de onde veio o trecho",
+      "autor_ano": "Sobrenome, Ano (estimado a partir do nome do arquivo/conteúdo, ou null)",
       "relacao": "VALIDA",
-      "explicacao": "por que valida/contradiz/complementa"
+      "classificacao": "PLENAMENTE_CONSONANTE",
+      "explicacao": "por que valida/contradiz/complementa, e recomendação de correção se houver problema"
     }}
   ],
   "cobertura": "ALTA",
@@ -226,7 +231,10 @@ Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
 }}
 
 Onde "relacao" usa: VALIDA | CONTRADIZ | COMPLEMENTA
+Onde "classificacao" usa: PLENAMENTE_CONSONANTE | CONSONANTE_COM_RESSALVA | IMPRECISAO_ATRIBUICAO | DISTORCAO_PARCIAL | DISTORCAO_GRAVE
 Onde "cobertura" usa: ALTA | MEDIA | BAIXA | NENHUMA
+
+REGRA: não invente conteúdo. Se a obra de apoio não contiver o argumento atribuído a ela, registre a ausência com precisão.
 """
 
 
@@ -580,11 +588,26 @@ def analisar_dissertacao(
 
     log_fn(f"✅ Análise concluída — {len(resultados_caps)} capítulo(s) processado(s)", "ok")
 
+    # ── Consolida lista de referências utilizadas ───────────────────────
+    referencias: dict[str, dict] = {}
+    for cap in resultados_caps:
+        for par in (cap.get("apoio") or {}).get("pares_encontrados") or []:
+            chave = par.get("autor_ano") or par.get("arquivo_fonte") or "—"
+            if chave not in referencias:
+                referencias[chave] = {
+                    "autor_ano": par.get("autor_ano") or "—",
+                    "arquivo_fonte": par.get("arquivo_fonte") or "—",
+                    "ocorrencias": 0,
+                }
+            referencias[chave]["ocorrencias"] += 1
+
     return {
         "metadados": metadados,
         "n_capitulos": len(capitulos),
         "n_arquivos_apoio": n_mat,
         "capitulos": resultados_caps,
+        "referencias": sorted(referencias.values(), key=lambda r: r["autor_ano"]),
+        "_capitulos_raw": capitulos,
     }
 
 
@@ -607,6 +630,13 @@ _COR_REL = {
     "CONTRADIZ": "#dc2626",
     "COMPLEMENTA": "#2563eb",
 }
+_CLASSIF_LABEL = {
+    "PLENAMENTE_CONSONANTE": ("✅ Plenamente consonante", "#16a34a"),
+    "CONSONANTE_COM_RESSALVA": ("✅⚠️ Consonante com ressalva", "#65a30d"),
+    "IMPRECISAO_ATRIBUICAO": ("⚠️ Imprecisão de atribuição", "#d97706"),
+    "DISTORCAO_PARCIAL": ("🔶 Distorção parcial", "#ea580c"),
+    "DISTORCAO_GRAVE": ("❌ Distorção grave", "#dc2626"),
+}
 
 
 def _esc(s) -> str:
@@ -624,8 +654,9 @@ def gerar_relatorio_analise(resultado: dict, rel_dir: Path) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # ── JSON ─────────────────────────────────────────────────────────────
+    resultado_json = {k: v for k, v in resultado.items() if not k.startswith("_")}
     (rel_dir / "relatorio_analise.json").write_text(
-        json.dumps(resultado, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(resultado_json, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     # ── Estatísticas gerais ──────────────────────────────────────────────
@@ -861,11 +892,18 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
             rel = str(par.get("relacao", "")).upper()
             rel_cls = rel.lower()
             rel_cor = _COR_REL.get(rel, "#64748b")
+            classif = str(par.get("classificacao", "")).upper()
+            classif_label, classif_cor = _CLASSIF_LABEL.get(classif, ("", "#64748b"))
+            autor_ano = _esc(par.get("autor_ano") or "")
+            classif_html = (
+                f'<span class="rel-tag" style="background:{classif_cor}22;color:{classif_cor};margin-left:6px">{_esc(classif_label)}</span>'
+                if classif_label else ""
+            )
             pares_html += f"""<div class="par-item {rel_cls}">
-              <span class="rel-tag" style="background:{rel_cor}22;color:{rel_cor}">{_esc(rel)}</span>
+              <span class="rel-tag" style="background:{rel_cor}22;color:{rel_cor}">{_esc(rel)}</span>{classif_html}
               <div class="argumento"><b>Dissertação:</b> {_esc(par.get("argumento_dissertacao",""))}</div>
               <div class="trecho">{_esc(par.get("trecho_apoio",""))}</div>
-              <div class="fonte">📄 {_esc(par.get("arquivo_fonte",""))} — {_esc(par.get("explicacao",""))}</div>
+              <div class="fonte">📄 {_esc(par.get("arquivo_fonte",""))}{f" ({autor_ano})" if autor_ano else ""} — {_esc(par.get("explicacao",""))}</div>
             </div>"""
 
         n_chars_fmt = f"{cap.get('n_chars', 0):,}"
@@ -935,6 +973,21 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
 </div>
 """
 
+    # ── Referências utilizadas ───────────────────────────────────────────
+    referencias = resultado.get("referencias") or []
+    if referencias:
+        refs_html = "".join(
+            f"<li><b>{_esc(r['autor_ano'])}</b> — {_esc(r['arquivo_fonte'])} "
+            f"<span style='color:var(--cinza)'>({r['ocorrencias']}x citado)</span></li>"
+            for r in referencias
+        )
+        html += f"""
+<div class="card">
+  <h2>📚 Referências Utilizadas pelo Material de Apoio</h2>
+  <ul class="lista">{refs_html}</ul>
+</div>
+"""
+
     html += f"""
 </main>
 <footer>Análise gerada automaticamente em {_esc(ts)} · Framework genérico de dissertações</footer>
@@ -991,4 +1044,351 @@ function toggleCap(header) {{
             L.append(f"Argumentos de apoio encontrados: {len(pares)}")
         L.append("")
 
+    referencias = resultado.get("referencias") or []
+    if referencias:
+        L += [sep, "  REFERÊNCIAS UTILIZADAS PELO MATERIAL DE APOIO", sep, ""]
+        for r in referencias:
+            L.append(f"  {r['autor_ano']} — {r['arquivo_fonte']} ({r['ocorrencias']}x citado)")
+        L.append("")
+
     (rel_dir / "relatorio_analise.txt").write_text("\n".join(L), encoding="utf-8")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MAPA SEMÂNTICO (visão geral do documento — usado para evitar redundância
+# e garantir "leitura completa" sem estourar o contexto)
+# ════════════════════════════════════════════════════════════════════════
+
+_PROMPT_MAPA = """Você é um assistente acadêmico criando um MAPA SEMÂNTICO de um capítulo de dissertação,
+para ser usado depois como contexto ao revisar o documento inteiro (evitar redundâncias entre capítulos).
+
+CAPÍTULO: «{titulo_cap}»
+
+TEXTO (até {n_chars} caracteres):
+\"\"\"
+{texto_cap}
+\"\"\"
+
+Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
+{{
+  "tema_central": "1 frase resumindo do que trata o capítulo",
+  "argumentos_chave": ["argumento 1", "argumento 2", "argumento 3"],
+  "conceitos_recorrentes": ["conceito 1", "conceito 2"],
+  "citacoes_principais": ["Autor, Ano: ideia citada"]
+}}
+"""
+
+
+def gerar_mapa_semantico(capitulos: list[tuple[str, str]], api_key: str, log_fn=None) -> list[dict]:
+    """
+    Gera um resumo estruturado de cada capítulo (1 chamada por capítulo).
+    Esse mapa é usado como contexto compacto representando o documento inteiro,
+    permitindo detectar redundâncias entre capítulos distantes sem reenviar o texto todo.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+    mapa: list[dict] = []
+    for i, (titulo_cap, conteudo) in enumerate(capitulos, 1):
+        if log_fn:
+            log_fn(f"   🗺 Mapeando [{i}/{len(capitulos)}]: «{titulo_cap[:50]}»…")
+        trecho = conteudo[:_MAX_CHARS_CAP]
+        prompt = _PROMPT_MAPA.format(titulo_cap=titulo_cap, texto_cap=trecho, n_chars=len(trecho))
+        try:
+            resumo = _chamar_claude(client, prompt, max_tokens=1000)
+        except Exception as e:
+            resumo = {"_erro": str(e)}
+        resumo["titulo"] = titulo_cap
+        mapa.append(resumo)
+    return mapa
+
+
+def _mapa_para_contexto(mapa: list[dict], excluir_idx: int = -1, max_chars: int = 6000) -> str:
+    """Serializa o mapa semântico (exceto o capítulo atual) em texto compacto."""
+    linhas = []
+    for i, m in enumerate(mapa):
+        if i == excluir_idx or m.get("_erro"):
+            continue
+        linhas.append(f"• {m.get('titulo','')}: {m.get('tema_central','')}")
+        for arg in (m.get("argumentos_chave") or [])[:2]:
+            linhas.append(f"   - {arg}")
+        for cit in (m.get("citacoes_principais") or [])[:2]:
+            linhas.append(f"   - cita: {cit}")
+    texto = "\n".join(linhas)
+    return texto[:max_chars]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# REESCRITA DE CAPÍTULOS
+# ════════════════════════════════════════════════════════════════════════
+
+_PROMPT_REESCRITA = """Você é um revisor acadêmico sênior reescrevendo um capítulo de TCC/dissertação brasileira,
+para gerar a VERSÃO FINAL CORRIGIDA do documento.
+
+VISÃO GERAL DO RESTANTE DO DOCUMENTO (use para evitar repetir argumentos/conceitos já tratados em outros capítulos):
+\"\"\"
+{mapa_geral}
+\"\"\"
+
+CAPÍTULO ATUAL: «{titulo_cap}»
+
+TEXTO ORIGINAL DO CAPÍTULO:
+\"\"\"
+{texto_cap}
+\"\"\"
+
+PROBLEMAS IDENTIFICADOS NA ANÁLISE CRÍTICA (corrija-os):
+{problemas}
+
+RECOMENDAÇÕES PRIORIZADAS:
+{recomendacoes}
+
+PROBLEMAS DE CONSONÂNCIA COM AS FONTES (corrija atribuições/citações incorretas):
+{consonancia}
+
+INSTRUÇÕES PARA A REESCRITA:
+1. Mantenha a extensão e profundidade compatíveis com um TCC/dissertação — NÃO resuma demais, é para ser uma versão completa e revisada, não um resumo.
+2. Remova redundâncias: frases ou argumentos repetidos dentro do próprio capítulo.
+3. Remova ou sinalize argumentos que já aparecem em outros capítulos (conforme a visão geral acima) — referencie a seção correspondente em vez de repetir.
+4. Reorganize a estrutura interna do capítulo do geral para o específico (contexto amplo → discussão específica → conclusão do capítulo).
+5. Corrija as distorções de consonância apontadas, ajustando a atribuição/citação para refletir corretamente a fonte.
+6. Corrija os problemas estruturais e ABNT identificados.
+7. Preserve citações ABNT válidas (autor, ano) e dados/resultados empíricos.
+8. Escreva em português formal acadêmico, terceira pessoa/impessoal.
+
+Retorne SOMENTE o texto revisado do capítulo (sem comentários, sem markdown, sem JSON — apenas o texto corrido do capítulo, incluindo o título)."""
+
+
+def reescrever_capitulo(
+    titulo_cap: str,
+    texto_cap: str,
+    mapa_geral: str,
+    analise: dict,
+    apoio: dict,
+    api_key: str,
+) -> str:
+    client = anthropic.Anthropic(api_key=api_key)
+
+    probs = analise.get("problemas_estruturais") or []
+    problemas_str = "\n".join(
+        f"- [{p.get('gravidade','?')}] {p.get('descricao','')}" for p in probs
+    ) or "Nenhum problema estrutural relevante identificado."
+
+    recs = analise.get("recomendacoes_priorizadas") or []
+    recs_str = "\n".join(f"- {r}" for r in recs) or "Nenhuma recomendação adicional."
+
+    pares_problema = [
+        p for p in (apoio.get("pares_encontrados") or [])
+        if str(p.get("classificacao", "")).upper() in
+        ("DISTORCAO_PARCIAL", "DISTORCAO_GRAVE", "IMPRECISAO_ATRIBUICAO")
+    ]
+    if pares_problema:
+        consonancia_str = "\n".join(
+            f"- Trecho: \"{p.get('argumento_dissertacao','')}\" → "
+            f"Problema: {p.get('classificacao','')} — {p.get('explicacao','')}"
+            for p in pares_problema
+        )
+    else:
+        consonancia_str = "Nenhum problema de consonância identificado para este capítulo."
+
+    prompt = _PROMPT_REESCRITA.format(
+        mapa_geral=mapa_geral or "(documento de capítulo único)",
+        titulo_cap=titulo_cap,
+        texto_cap=texto_cap[:_MAX_CHARS_CAP],
+        problemas=problemas_str,
+        recomendacoes=recs_str,
+        consonancia=consonancia_str,
+    )
+
+    resp = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=8000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+
+_PROMPT_REVISAO_TRANSICAO = """Você é um revisor acadêmico fazendo a REVISÃO FINAL de coesão entre capítulos consecutivos
+de um TCC/dissertação já reescrito.
+
+FIM DO CAPÍTULO ANTERIOR («{titulo_ant}»):
+\"\"\"
+{fim_ant}
+\"\"\"
+
+CAPÍTULO ATUAL («{titulo_atual}»), TEXTO COMPLETO:
+\"\"\"
+{texto_atual}
+\"\"\"
+
+INÍCIO DO PRÓXIMO CAPÍTULO («{titulo_prox}»):
+\"\"\"
+{inicio_prox}
+\"\"\"
+
+Revise APENAS o capítulo atual para:
+1. Garantir transição fluida com o capítulo anterior e o próximo (sem repetir literalmente o que já foi dito).
+2. Remover qualquer frase ou parágrafo redundante que se repita quase identicamente em relação aos trechos mostrados acima.
+3. Manter todo o restante do conteúdo e extensão.
+
+Retorne SOMENTE o texto revisado do capítulo atual (sem comentários, sem markdown)."""
+
+
+def revisar_transicoes(capitulos_revisados: list[dict], api_key: str, log_fn=None) -> list[dict]:
+    """
+    Passada final: revisa cada capítulo considerando o fim do anterior e o início do próximo,
+    para garantir coesão geral e remover repetições residuais entre capítulos adjacentes.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+    n = len(capitulos_revisados)
+    revisados_final = []
+
+    for i, cap in enumerate(capitulos_revisados):
+        titulo = cap["titulo"]
+        texto = cap["texto"]
+
+        if n == 1:
+            revisados_final.append(cap)
+            continue
+
+        fim_ant = capitulos_revisados[i-1]["texto"][-1500:] if i > 0 else "(é o primeiro capítulo)"
+        titulo_ant = capitulos_revisados[i-1]["titulo"] if i > 0 else "—"
+        inicio_prox = capitulos_revisados[i+1]["texto"][:1500] if i < n-1 else "(é o último capítulo)"
+        titulo_prox = capitulos_revisados[i+1]["titulo"] if i < n-1 else "—"
+
+        if log_fn:
+            log_fn(f"   📝 Revisão final [{i+1}/{n}]: «{titulo[:50]}»…")
+
+        prompt = _PROMPT_REVISAO_TRANSICAO.format(
+            titulo_ant=titulo_ant, fim_ant=fim_ant,
+            titulo_atual=titulo, texto_atual=texto[:_MAX_CHARS_CAP],
+            titulo_prox=titulo_prox, inicio_prox=inicio_prox,
+        )
+        try:
+            resp = client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=8000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            texto_final = resp.content[0].text.strip()
+        except Exception as e:
+            if log_fn:
+                log_fn(f"   ⚠ Erro na revisão final do capítulo: {e}", "warn")
+            texto_final = texto
+
+        revisados_final.append({"titulo": titulo, "texto": texto_final})
+
+    return revisados_final
+
+
+# ════════════════════════════════════════════════════════════════════════
+# EXPORTAÇÃO DO .DOCX REVISADO
+# ════════════════════════════════════════════════════════════════════════
+
+def gerar_docx_revisado(metadados: dict, capitulos_revisados: list[dict], output_path: Path) -> Path:
+    """Monta o documento .docx final a partir dos capítulos reescritos."""
+    import docx
+    from docx.shared import Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = docx.Document()
+
+    # Página de rosto
+    titulo = doc.add_heading(metadados.get("titulo") or "Dissertação Revisada", level=0)
+    titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    info = doc.add_paragraph()
+    info.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for campo, label in [
+        ("autor", "Autor"), ("instituicao", "Instituição"), ("programa", "Programa"),
+        ("orientador", "Orientador"), ("area", "Área"), ("ano", "Ano"),
+    ]:
+        valor = metadados.get(campo)
+        if valor:
+            info.add_run(f"{label}: {valor}\n")
+
+    aviso = doc.add_paragraph()
+    aviso_run = aviso.add_run(
+        "Documento gerado automaticamente — versão revisada com base em análise crítica "
+        "de IA, removendo redundâncias e corrigindo inconsistências de consonância com as fontes citadas. "
+        "Recomenda-se revisão final pelo autor antes da entrega."
+    )
+    aviso_run.italic = True
+    aviso_run.font.size = Pt(9)
+
+    doc.add_page_break()
+
+    # Capítulos
+    for cap in capitulos_revisados:
+        texto = cap["texto"]
+        linhas = [l for l in texto.split("\n") if l.strip()]
+        if not linhas:
+            continue
+
+        # Primeira linha não-vazia = título do capítulo
+        primeiro = linhas[0].strip()
+        resto = linhas[1:]
+
+        # Heuristica: titulo curto -> Heading; senao usa o titulo original
+        if len(primeiro) <= 120:
+            doc.add_heading(primeiro, level=1)
+        else:
+            doc.add_heading(cap["titulo"], level=1)
+            resto = linhas
+
+        for par in resto:
+            par = par.strip()
+            if not par:
+                continue
+            p = doc.add_paragraph(par)
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+    output_path = Path(output_path)
+    doc.save(str(output_path))
+    return output_path
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ORQUESTRADOR — DISSERTAÇÃO REVISADA
+# ════════════════════════════════════════════════════════════════════════
+
+def gerar_dissertacao_revisada(
+    capitulos: list[tuple[str, str]],
+    resultados_caps: list[dict],
+    metadados: dict,
+    api_key: str,
+    output_path: Path,
+    log_fn,
+) -> Path:
+    """
+    Pipeline completo de geração da dissertação revisada:
+      1. Mapa semântico do documento (visão geral, evita redundância)
+      2. Reescrita capítulo a capítulo (corrige problemas, consonância, redundância, ordem geral->especifico)
+      3. Revisão final de transições/coesão entre capítulos
+      4. Exporta .docx
+    """
+    log_fn("🗺 ETAPA 6: Gerando mapa semântico do documento completo…", "etapa")
+    mapa = gerar_mapa_semantico(capitulos, api_key, log_fn=log_fn)
+    log_fn(f"   Mapa semântico gerado para {len(mapa)} capítulo(s)")
+
+    log_fn("✍ ETAPA 7: Reescrevendo capítulos (corrigindo redundâncias, consonância e estrutura)…", "etapa")
+    capitulos_revisados: list[dict] = []
+    n = len(capitulos)
+    for i, (titulo_cap, conteudo) in enumerate(capitulos):
+        log_fn(f"   [{i+1}/{n}] Reescrevendo: «{titulo_cap[:50]}»…")
+        analise = (resultados_caps[i] or {}).get("analise") or {}
+        apoio = (resultados_caps[i] or {}).get("apoio") or {}
+        mapa_contexto = _mapa_para_contexto(mapa, excluir_idx=i)
+        try:
+            texto_revisado = reescrever_capitulo(titulo_cap, conteudo, mapa_contexto, analise, apoio, api_key)
+        except Exception as e:
+            log_fn(f"   ⚠ Erro ao reescrever capítulo, mantendo original: {e}", "warn")
+            texto_revisado = f"{titulo_cap}\n\n{conteudo}"
+        capitulos_revisados.append({"titulo": titulo_cap, "texto": texto_revisado})
+
+    log_fn("📝 ETAPA 8: Revisão final de coesão entre capítulos…", "etapa")
+    capitulos_revisados = revisar_transicoes(capitulos_revisados, api_key, log_fn=log_fn)
+
+    log_fn("💾 ETAPA 9: Gerando arquivo .docx revisado…", "etapa")
+    caminho = gerar_docx_revisado(metadados, capitulos_revisados, output_path)
+    log_fn(f"   ✓ Dissertação revisada salva: {caminho.name}", "ok")
+
+    return caminho

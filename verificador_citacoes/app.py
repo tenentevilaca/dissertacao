@@ -178,6 +178,22 @@ async def baixar_relatorio_analise(job_id: str, formato: str):
     return FileResponse(caminho, filename=nomes[formato], media_type=media)
 
 
+@app.get("/dissertacao-revisada/{job_id}")
+async def baixar_dissertacao_revisada(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    docx_path = _jobs[job_id].get("docx_revisado")
+    if not docx_path or not Path(docx_path).exists():
+        raise HTTPException(404, "Dissertação revisada não disponível")
+
+    meta = _jobs[job_id].get("metadados") or {}
+    nome = "dissertacao_revisada.docx"
+    return FileResponse(
+        docx_path, filename=nome,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
@@ -313,6 +329,7 @@ def _rodar_analise_dissertacao(
             gerar_relatorio_analise,
             baixar_google_drive,
             baixar_google_drive_bytes,
+            gerar_dissertacao_revisada,
             _ler_bytes as _ler_bytes_apoio,
         )
 
@@ -376,12 +393,29 @@ def _rodar_analise_dissertacao(
         gerar_relatorio_analise(resultado, rel_dir)
 
         _jobs[job_id]["relatorio_dir"] = str(rel_dir)
+
+        # ── Geração da dissertação revisada (.docx) ─────────────────────
+        docx_path = None
+        try:
+            capitulos_raw = resultado.get("_capitulos_raw") or []
+            docx_path = gerar_dissertacao_revisada(
+                capitulos=capitulos_raw,
+                resultados_caps=resultado.get("capitulos") or [],
+                metadados=resultado.get("metadados") or {},
+                api_key=api_key,
+                output_path=rel_dir / "dissertacao_revisada.docx",
+                log_fn=log,
+            )
+        except Exception as e:
+            log(f"   ⚠ Erro ao gerar dissertação revisada: {e}", "warn")
+
+        _jobs[job_id]["docx_revisado"] = str(docx_path) if docx_path else None
         _jobs[job_id]["status"] = "concluido"
 
         caps = resultado.get("capitulos") or []
         ponts = [c["analise"].get("pontuacao_geral", "") for c in caps]
 
-        _enviar(loop, queue, {
+        log_concluido = {
             "tipo": "concluido",
             "msg": "Análise concluída!",
             "resumo": {
@@ -392,8 +426,11 @@ def _rodar_analise_dissertacao(
                 "n_apoio":       resultado.get("n_arquivos_apoio", 0),
                 "autor":         (resultado.get("metadados") or {}).get("autor") or "—",
                 "titulo":        (resultado.get("metadados") or {}).get("titulo") or "—",
+                "docx_disponivel": docx_path is not None,
             },
-        })
+        }
+        _jobs[job_id]["logs"].append(log_concluido)
+        _enviar(loop, queue, log_concluido)
 
     except Exception as exc:
         import traceback
