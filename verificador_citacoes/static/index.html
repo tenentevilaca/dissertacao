@@ -1001,7 +1001,11 @@ function anlIrPara(n) {
     else if (i + 1 < n) s.classList.add('completo');
   });
   anlEstado.passo = n;
-  if (n === 4) anlIniciarAnalise();
+  if (n === 4) {
+    if (anlEstado.analisando) return;
+    anlEstado.analisando = true;
+    anlIniciarAnalise();
+  }
 }
 
 function anlSelecionarDiss(input) {
@@ -1285,6 +1289,7 @@ function anlMostrarRelatorio(resumo, jobId) {
 function anlReiniciar() {
   if (anlEstado.jobId) fetch('/job/' + anlEstado.jobId, { method: 'DELETE' }).catch(() => {});
   anlEstado.fileDiss = null; anlEstado.fileMat = null; anlEstado.driveUrl = ''; anlEstado.jobId = null;
+  anlEstado.analisando = false;
   document.getElementById('anl-badge-diss').innerHTML = '';
   document.getElementById('anl-badge-mat').innerHTML = '';
   document.getElementById('anl-file-diss').value = '';
