@@ -468,6 +468,90 @@ def verificar_com_claude(
         return {"veredicto": "ERRO", "justificativa": str(e)[:200], "trecho_fonte": ""}
 
 
+_PROMPT_VERIF_GRUPO = """Você é um verificador de integridade acadêmica especializado em dissertações.
+
+REFERÊNCIA CITADA: {referencia}
+ARQUIVO FONTE: {arquivo}
+
+TRECHO RELEVANTE DA OBRA CITADA (extraído automaticamente):
+\"\"\"{fonte}\"\"\"
+
+A seguir estão {n} trecho(s) da dissertação que citam essa obra. Para CADA trecho, avalie:
+1. O argumento apresentado é coerente com o que a obra realmente afirma?
+2. Há distorção de sentido, generalização indevida ou uso fora de contexto?
+3. A ideia atribuída ao autor realmente consta na obra?
+
+{trechos}
+
+Responda SOMENTE com um array JSON (sem markdown, sem explicação extra), um item por trecho, na MESMA ORDEM em que foram apresentados:
+[{{"indice": 1, "veredicto": "CORRETO" | "INCORRETO" | "PARCIAL" | "SEM_FONTE", "justificativa": "uma frase explicando o veredicto", "trecho_fonte": "trecho exato da obra que confirma ou contradiz (até 200 chars)"}}]
+"""
+
+
+def verificar_grupo_com_claude(
+    citacoes: list["Citacao"],
+    referencia: "Referencia",
+    arquivo_fonte: str,
+    texto_fonte: str,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+) -> list[dict]:
+    """Verifica TODAS as citações de uma mesma obra em UMA única chamada à API."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    contexto_combinado = "\n".join(c.contexto for c in citacoes)
+    trecho = _extrair_trecho_relevante(contexto_combinado, texto_fonte, janela=6000)
+
+    trechos_fmt = "\n".join(
+        f'TRECHO {i}:\n  Citação: {c.texto}\n  Contexto: """{c.contexto[:600]}"""'
+        for i, c in enumerate(citacoes, 1)
+    )
+
+    prompt = _PROMPT_VERIF_GRUPO.format(
+        referencia=referencia.texto[:150],
+        arquivo=arquivo_fonte,
+        fonte=trecho,
+        n=len(citacoes),
+        trechos=trechos_fmt,
+    )
+
+    padrao = [{"veredicto": "ERRO", "justificativa": "sem resposta", "trecho_fonte": ""} for _ in citacoes]
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=400 * len(citacoes) + 256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?", "", raw).strip().strip("`").strip()
+        try:
+            itens = json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r"\[.*\]", raw, re.DOTALL)
+            itens = json.loads(m.group()) if m else None
+
+        if not isinstance(itens, list):
+            for d in padrao:
+                d["justificativa"] = raw[:300]
+            return padrao
+
+        resultados = list(padrao)
+        for item in itens:
+            idx = item.get("indice")
+            if isinstance(idx, int) and 1 <= idx <= len(resultados):
+                resultados[idx - 1] = {
+                    "veredicto": item.get("veredicto", "ERRO"),
+                    "justificativa": item.get("justificativa", ""),
+                    "trecho_fonte": item.get("trecho_fonte", ""),
+                }
+        return resultados
+    except Exception as e:
+        for d in padrao:
+            d["justificativa"] = str(e)[:200]
+        return padrao
+
+
 def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict[str, str]) -> tuple[str, str]:
     """
     Tenta encontrar o arquivo de apoio correspondente à referência.
@@ -635,34 +719,70 @@ def analisar(
     # ──────────────────────────────────────────────────────────────────
     # Verificação semântica
     # ──────────────────────────────────────────────────────────────────
+    # Páginas estimadas (offset de caracteres / chars por página, padrão ABNT ~1800)
+    paragrafos_diss = texto_diss.split("\n")
+    CHARS_POR_PAGINA = 1800
+    offsets = []
+    acumulado = 0
+    for p in paragrafos_diss:
+        offsets.append(acumulado)
+        acumulado += len(p) + 1
+
+    def _pagina_estimada(idx_paragrafo: int) -> int:
+        if 0 <= idx_paragrafo < len(offsets):
+            return offsets[idx_paragrafo] // CHARS_POR_PAGINA + 1
+        return 0
+
     verificacoes: list[dict] = []
 
     if api_key.strip() and not sem_verificacao and pareamentos:
-        log_fn(f"🤖 ETAPA 4: Verificando {len(pareamentos)} citação(ões) com Claude…", "etapa")
-        for i, (cit, ref) in enumerate(pareamentos, 1):
-            arquivo_fonte, texto_fonte = _buscar_fonte(cit.autores[0], cit.ano, ref.titulo, material)
-            log_fn(f"   [{i}/{len(pareamentos)}] {cit.texto[:60]}")
+        # Agrupa citações por obra (mesma referência) para evitar releitura/reanálise repetida
+        grupos: dict[tuple[str, str], list[tuple[Citacao, Referencia]]] = {}
+        ordem_grupos: list[tuple[str, str]] = []
+        for cit, ref in pareamentos:
+            chave = (ref.sobrenome, ref.ano)
+            if chave not in grupos:
+                grupos[chave] = []
+                ordem_grupos.append(chave)
+            grupos[chave].append((cit, ref))
+
+        log_fn(f"🤖 ETAPA 4: Verificando {len(pareamentos)} citação(ões) "
+               f"agrupadas em {len(ordem_grupos)} obra(s) com Claude…", "etapa")
+
+        for gi, chave in enumerate(ordem_grupos, 1):
+            grupo = grupos[chave]
+            ref = grupo[0][1]
+            citacoes_grupo = [cit for cit, _ in grupo]
+            log_fn(f"   [{gi}/{len(ordem_grupos)}] {ref.sobrenome} ({ref.ano}) "
+                   f"— {len(citacoes_grupo)} citação(ões)")
+
+            arquivo_fonte, texto_fonte = _buscar_fonte(citacoes_grupo[0].autores[0], ref.ano, ref.titulo, material)
 
             if not texto_fonte:
                 log_fn(f"      → fonte não encontrada: {ref.sobrenome} ({ref.ano})")
+                for cit, _ in grupo:
+                    verificacoes.append({
+                        "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
+                        "contexto": cit.contexto, "referencia": ref.texto[:200],
+                        "pagina_estimada": _pagina_estimada(cit.paragrafo_idx),
+                        "arquivo_fonte": "", "veredicto": "SEM_FONTE",
+                        "justificativa": f"Arquivo para {ref.sobrenome} ({ref.ano}) não encontrado na pasta de referências",
+                        "trecho_fonte": "",
+                    })
+                continue
+
+            resultados = verificar_grupo_com_claude(citacoes_grupo, ref, arquivo_fonte, texto_fonte, api_key)
+            for cit, resultado in zip(citacoes_grupo, resultados):
+                emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠", "SEM_FONTE": "?", "ERRO": "!"}.get(
+                    resultado.get("veredicto", ""), "?")
+                pag = _pagina_estimada(cit.paragrafo_idx)
+                log_fn(f"      {emoji} (p.~{pag}) {resultado.get('veredicto')} — {resultado.get('justificativa','')[:80]}")
                 verificacoes.append({
                     "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
                     "contexto": cit.contexto, "referencia": ref.texto[:200],
-                    "arquivo_fonte": "", "veredicto": "SEM_FONTE",
-                    "justificativa": f"Arquivo para {ref.sobrenome} ({ref.ano}) não encontrado na pasta de referências",
-                    "trecho_fonte": "",
+                    "pagina_estimada": pag,
+                    "arquivo_fonte": arquivo_fonte, **resultado,
                 })
-                continue
-
-            resultado = verificar_com_claude(cit, ref, arquivo_fonte, texto_fonte, api_key)
-            emoji = {"CORRETO": "✓", "INCORRETO": "✗", "PARCIAL": "⚠", "SEM_FONTE": "?", "ERRO": "!"}.get(
-                resultado.get("veredicto", ""), "?")
-            log_fn(f"      {emoji} {resultado.get('veredicto')} — {resultado.get('justificativa','')[:80]}")
-            verificacoes.append({
-                "citacao": cit.texto, "autores": cit.autores, "ano": cit.ano,
-                "contexto": cit.contexto, "referencia": ref.texto[:200],
-                "arquivo_fonte": arquivo_fonte, **resultado,
-            })
     elif not api_key.strip() and pareamentos:
         log_fn("⏭ Verificação semântica ignorada (sem chave API).", "etapa")
         log_fn(f"   Para verificar as {len(pareamentos)} citação(ões), informe sua chave API Claude.")
@@ -755,6 +875,8 @@ def gerar_relatorio(resultado: dict, rel_dir: Path, diss_path: str) -> None:
             f"    Veredicto  : {v.get('veredicto','')}",
             f"    Justificativa: {v.get('justificativa','')}",
         ]
+        if v.get("pagina_estimada"):
+            linhas.append(f"    Página estimada na dissertação: ~{v['pagina_estimada']}")
         if v.get("arquivo_fonte"):
             linhas.append(f"    Arquivo fonte: {v['arquivo_fonte']}")
         if v.get("trecho_fonte"):
@@ -819,8 +941,11 @@ def gerar_relatorio(resultado: dict, rel_dir: Path, diss_path: str) -> None:
         trecho = v.get("trecho_fonte", "")
         trecho_html = (f'<blockquote style="margin:.4em 0;font-style:italic;color:#555">'
                        f'"{esc(trecho)}"</blockquote>') if trecho else ""
+        pag = v.get("pagina_estimada")
+        pag_html = f'<br><small>Página estimada: ~{pag}</small>' if pag else ""
         return (
             f'<b class="{cls}">{esc(v["citacao"])}</b>'
+            f'{pag_html}'
             f'<br><small>Fonte: <em>{esc(v.get("arquivo_fonte","?"))}</em></small>'
             f'<br><small>Ref.: {esc(v.get("referencia","")[:120])}</small>'
             f'<br>{esc(v.get("justificativa",""))}'
