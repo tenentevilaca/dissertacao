@@ -467,6 +467,9 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         Você pode selecionar múltiplos arquivos de uma vez.
       </p>
 
+      <div id="verif-import-badge" class="anl-import-badge" style="display:none"></div>
+
+      <div id="painel-ref-normal">
       <div class="dropzone" id="drop-ref">
         <input type="file" id="file-ref" multiple accept=".pdf,.docx,.doc,.txt"
                onchange="selecionarRefs(this)">
@@ -475,6 +478,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         <p>Formatos: <code>.pdf</code> · <code>.docx</code> · <code>.txt</code> · múltiplos arquivos</p>
       </div>
       <div id="badges-ref"></div>
+      </div><!-- /painel-ref-normal -->
 
       <div class="btn-row">
         <button class="btn btn-outline" onclick="irPara(1)">← Voltar</button>
@@ -840,6 +844,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     </div>
 
     <div id="loc-status" class="loc-status"></div>
+    <div id="loc-logs" class="log-box" style="display:none;max-height:240px;overflow-y:auto;margin-top:10px;"></div>
     <div id="loc-import" style="margin-top:8px;"></div>
     <div id="loc-resultado" style="margin-top:16px;"></div>
   </div>
@@ -854,7 +859,32 @@ const estado = {
   fileDiss: null,
   fileRefs: [],
   jobId:   null,
+  materialLocalizadoJobId: null,
+  materialLocalizadoCount: 0,
 };
+
+function verifAtualizarBadgeImportado() {
+  const el = document.getElementById('verif-import-badge');
+  const painel = document.getElementById('painel-ref-normal');
+  if (estado.materialLocalizadoJobId) {
+    el.innerHTML = `
+      <span>📥 Usando <b>${estado.materialLocalizadoCount}</b> arquivo(s) importado(s) da aba "Localizar Referências" como obras de apoio.</span>
+      <button onclick="verifRemoverMaterialImportado()">Remover</button>`;
+    el.style.display = 'flex';
+    painel.style.display = 'none';
+    document.getElementById('btn-prox-2').disabled = false;
+  } else {
+    el.style.display = 'none';
+    painel.style.display = '';
+    document.getElementById('btn-prox-2').disabled = estado.fileRefs.length === 0;
+  }
+}
+
+function verifRemoverMaterialImportado() {
+  estado.materialLocalizadoJobId = null;
+  estado.materialLocalizadoCount = 0;
+  verifAtualizarBadgeImportado();
+}
 
 // ── Navegação entre passos ───────────────────────────────────────────────
 function irPara(n) {
@@ -963,7 +993,11 @@ async function iniciarAnalise() {
 
   const form = new FormData();
   form.append('dissertacao', estado.fileDiss, estado.fileDiss.name);
-  estado.fileRefs.forEach(f => form.append('referencias', f, f.name));
+  if (estado.materialLocalizadoJobId) {
+    form.append('material_localizado_job_id', estado.materialLocalizadoJobId);
+  } else {
+    estado.fileRefs.forEach(f => form.append('referencias', f, f.name));
+  }
   form.append('api_key', document.getElementById('apikey').value.trim());
   form.append('sem_verificacao', document.getElementById('toggle-sem-ia').checked);
 
@@ -1084,6 +1118,9 @@ function reiniciarVerif() {
   document.getElementById('prog-bar').style.width = '0%';
   document.getElementById('prog-bar').style.background = '';
   document.getElementById('log-box').innerHTML = '';
+  estado.materialLocalizadoJobId = null;
+  estado.materialLocalizadoCount = 0;
+  verifAtualizarBadgeImportado();
   irPara(1);
 }
 
@@ -1169,9 +1206,16 @@ async function locIniciar() {
   const { job_id } = await resp.json();
   status.textContent = '⏳ Processando…';
 
+  const logsEl = document.getElementById('loc-logs');
+
   const poll = async () => {
     const r = await fetch('/status-localizar-referencias/' + job_id);
     const j = await r.json();
+    if (j.logs && j.logs.length) {
+      logsEl.style.display = 'block';
+      logsEl.textContent = j.logs.join('\n');
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
     if (j.status === 'rodando') {
       setTimeout(poll, 1500);
       return;
@@ -1208,20 +1252,20 @@ function locMostrarResultado(resultado, jobId) {
   const importEl = document.getElementById('loc-import');
   if (resultado.n_arquivos_relevantes > 0) {
     importEl.innerHTML = `
-      <button class="loc-import-btn" onclick="locImportarParaAnalise('${jobId}', ${resultado.n_arquivos_relevantes})">
-        📥 Importar ${resultado.n_arquivos_relevantes} arquivo(s) para Análise da Dissertação
+      <button class="loc-import-btn" onclick="locImportarParaVerificador('${jobId}', ${resultado.n_arquivos_relevantes})">
+        📥 Importar ${resultado.n_arquivos_relevantes} arquivo(s) para o Verificador de Citações
       </button>`;
   } else {
     importEl.innerHTML = '';
   }
 }
 
-function locImportarParaAnalise(jobId, n) {
-  anlEstado.materialLocalizadoJobId = jobId;
-  anlEstado.materialLocalizadoCount = n;
-  mudarModo('analisador');
-  anlIrPara(1);
-  anlAtualizarBadgeImportado();
+function locImportarParaVerificador(jobId, n) {
+  estado.materialLocalizadoJobId = jobId;
+  estado.materialLocalizadoCount = n;
+  mudarModo('verificador');
+  irPara(1);
+  verifAtualizarBadgeImportado();
 }
 
 function anlIrPara(n) {

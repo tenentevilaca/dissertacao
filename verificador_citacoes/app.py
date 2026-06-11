@@ -215,6 +215,7 @@ async def iniciar_localizar_referencias(
         "material_texto": {},
         "arquivos_relevantes": [],
         "resultado": None,
+        "logs": [],
     }
 
     refs_texto_final = referencias_texto or ""
@@ -247,7 +248,7 @@ async def status_localizar_referencias(job_id: str):
     if job_id not in _jobs:
         raise HTTPException(404, "Job não encontrado")
     job = _jobs[job_id]
-    return {"status": job["status"], "resultado": job.get("resultado")}
+    return {"status": job["status"], "resultado": job.get("resultado"), "logs": job.get("logs", [])}
 
 
 @app.get("/material-arquivo/{job_id}/{nome_arquivo}")
@@ -271,6 +272,9 @@ def _rodar_localizar_referencias(
     drive_url: str,
     api_key: str = "",
 ):
+    def log(msg: str):
+        _jobs[job_id]["logs"].append(msg)
+
     try:
         from analisador import (
             parsear_lista_referencias,
@@ -282,6 +286,7 @@ def _rodar_localizar_referencias(
         from verificador import ler_arquivo
 
         # ── Lista de referências ─────────────────────────────────────────
+        log("📑 Lendo lista de referências…")
         texto_refs = refs_texto or ""
         if refs_path:
             p = Path(refs_path)
@@ -291,38 +296,59 @@ def _rodar_localizar_referencias(
                 texto_refs += "\n" + ler_arquivo(p)
 
         referencias = parsear_lista_referencias(texto_refs)
+        log(f"   {len(referencias)} referência(s) identificada(s)")
 
         # ── Material de apoio ────────────────────────────────────────────
+        log("📂 Lendo material de apoio…")
         material: dict[str, str] = {}
         material_bytes: dict[str, bytes] = {}
 
         for mat_path in mat_paths:
             mp = Path(mat_path)
             if mp.suffix.lower() == ".zip":
+                log(f"   Extraindo {mp.name}…")
                 for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp).items():
                     material[nome] = texto
                     material_bytes[nome] = dados
+                    log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
                 texto = ler_arquivo(mp)
                 if texto and len(texto) > 100:
                     nome = mp.name[:80]
                     material[nome] = texto
                     material_bytes[nome] = mp.read_bytes()
+                    log(f"   ✓ {nome} ({len(texto):,} chars)")
+                else:
+                    log(f"   ✗ {mp.name} — não foi possível ler")
 
         if not mat_paths and drive_url:
+            log("   Baixando material do Google Drive…")
             drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url)
             if drive_ext.lower() == ".zip":
                 for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_bytes).items():
                     material[nome] = texto
                     material_bytes[nome] = dados
+                    log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
                 texto = _ler_bytes_apoio(drive_bytes, drive_ext)
                 if texto and len(texto) > 100:
                     nome = f"arquivo_drive{drive_ext}"
                     material[nome] = texto
                     material_bytes[nome] = drive_bytes
+                    log(f"   ✓ {nome} ({len(texto):,} chars)")
 
-        resultado = localizar_referencias(referencias, material, api_key)
+        log(f"   {len(material)} arquivo(s) de apoio lido(s)")
+
+        # ── Localização das referências ──────────────────────────────────
+        log(f"🔎 Procurando {len(referencias)} referência(s) em {len(material)} arquivo(s)…")
+
+        def log_ref(i: int, total: int, ref: str, encontrado: bool, arquivos: list[str]):
+            if encontrado:
+                log(f"   [{i}/{total}] ✓ {ref[:70]} → {', '.join(arquivos)}")
+            else:
+                log(f"   [{i}/{total}] ✗ {ref[:70]} — não encontrado")
+
+        resultado = localizar_referencias(referencias, material, api_key, log_fn=log_ref)
 
         arquivos_relevantes = sorted({
             nome for item in resultado for nome in item["arquivos"]
@@ -348,9 +374,10 @@ def _rodar_localizar_referencias(
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
-    referencias: list[UploadFile] = File(...),
+    referencias: list[UploadFile] = File(default=[]),
     api_key: str = Form(""),
     sem_verificacao: str = Form("false"),
+    material_localizado_job_id: str = Form(""),
 ):
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
@@ -370,17 +397,19 @@ async def iniciar_analise(
     refs_dir = Path(tmpdir) / "referencias"
     refs_dir.mkdir()
     for arq in referencias:
-        dest = refs_dir / arq.filename
-        dest.write_bytes(await arq.read())
+        if arq and arq.filename:
+            dest = refs_dir / arq.filename
+            dest.write_bytes(await arq.read())
 
     # Converte sem_verificacao (vem como string do FormData JS)
     sem_verif_bool = str(sem_verificacao).lower() in ("true", "1", "yes")
+    loc_job_id = material_localizado_job_id.strip() if material_localizado_job_id else ""
 
     # Dispara análise em thread separada (código síncrono)
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise,
-        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verif_bool, loop),
+        args=(job_id, str(diss_path), str(refs_dir), api_key, sem_verif_bool, loc_job_id, loop),
         daemon=True,
     ).start()
 
@@ -603,6 +632,7 @@ def _rodar_analise(
     refs_dir: str,
     api_key: str,
     sem_verificacao: bool,
+    loc_job_id: str,
     loop: asyncio.AbstractEventLoop,
 ):
     queue = _jobs[job_id]["queue"]
@@ -618,12 +648,21 @@ def _rodar_analise(
 
         from verificador import analisar, gerar_relatorio
 
+        material_preimportado = None
+        loc_job = _jobs.get(loc_job_id) if loc_job_id else None
+        if loc_job and loc_job.get("status") == "concluido":
+            relevantes = loc_job.get("arquivos_relevantes") or []
+            material_texto = loc_job.get("material_texto") or {}
+            material_preimportado = {n: material_texto[n] for n in relevantes if n in material_texto}
+            log(f"📥 Usando {len(material_preimportado)} arquivo(s) importado(s) da Localização de Referências", "etapa")
+
         resultado = analisar(
             diss_path=diss_path,
             refs_dir=refs_dir,
             api_key=api_key,
             sem_verificacao=sem_verificacao,
             log_fn=log,
+            material_preimportado=material_preimportado,
         )
 
         log("📊 Gerando relatórios…", "etapa")

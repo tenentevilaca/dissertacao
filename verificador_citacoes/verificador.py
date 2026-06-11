@@ -599,10 +599,11 @@ def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict[str, str
 
 def analisar(
     diss_path: str,
-    refs_dir: str,
+    refs_dir: Optional[str],
     api_key: str,
     sem_verificacao: bool,
     log_fn,
+    material_preimportado: Optional[dict[str, str]] = None,
 ) -> dict:
     """
     Executa as 3 etapas e retorna um dicionário pronto para o relatório.
@@ -631,21 +632,28 @@ def analisar(
     # ──────────────────────────────────────────────────────────────────
     log_fn("📂 ETAPA 2: Lendo material de apoio…", "etapa")
 
-    extensoes = {".pdf", ".docx", ".doc", ".txt"}
-    arquivos = [
-        f for f in Path(refs_dir).rglob("*")
-        if f.is_file() and f.suffix.lower() in extensoes
-    ]
-    log_fn(f"   {len(arquivos)} arquivo(s) encontrado(s)")
+    material: dict[str, str]
+    if material_preimportado is not None:
+        material = material_preimportado
+        log_fn(f"   {len(material)} arquivo(s) importado(s) da Localização de Referências")
+        for nome, texto in material.items():
+            log_fn(f"   ✓ {nome} ({len(texto):,} chars)")
+    else:
+        extensoes = {".pdf", ".docx", ".doc", ".txt"}
+        arquivos = [
+            f for f in Path(refs_dir).rglob("*")
+            if f.is_file() and f.suffix.lower() in extensoes
+        ]
+        log_fn(f"   {len(arquivos)} arquivo(s) encontrado(s)")
 
-    material: dict[str, str] = {}
-    for arq in arquivos:
-        texto = ler_arquivo(arq)
-        if texto and len(texto) > 50 and not texto.startswith("[ERRO"):
-            material[arq.name] = texto
-            log_fn(f"   ✓ {arq.name} ({len(texto):,} chars)")
-        else:
-            log_fn(f"   ✗ {arq.name} — não foi possível ler")
+        material = {}
+        for arq in arquivos:
+            texto = ler_arquivo(arq)
+            if texto and len(texto) > 50 and not texto.startswith("[ERRO"):
+                material[arq.name] = texto
+                log_fn(f"   ✓ {arq.name} ({len(texto):,} chars)")
+            else:
+                log_fn(f"   ✗ {arq.name} — não foi possível ler")
 
     log_fn(f"   {len(material)} documento(s) lido(s) com sucesso")
 

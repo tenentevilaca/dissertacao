@@ -489,6 +489,7 @@ def localizar_referencias(
     referencias: list[str],
     material: dict[str, str],
     api_key: str = "",
+    log_fn=None,
 ) -> list[dict]:
     """
     Para cada referência da lista, procura nos textos do material de apoio
@@ -594,6 +595,9 @@ def localizar_referencias(
             "arquivos": arquivos,
             "encontrado": bool(arquivos),
         })
+
+        if log_fn:
+            log_fn(len(resultados), len(referencias), ref, bool(arquivos), arquivos)
 
     return resultados
 
