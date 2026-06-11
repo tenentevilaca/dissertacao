@@ -342,6 +342,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
   <div class="mode-tabs">
     <button class="mode-tab ativo" onclick="mudarModo('verificador')">🔍 Verificador de Citações</button>
     <button class="mode-tab" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
+    <button class="mode-tab" onclick="mudarModo('localizador')">🔗 Localizar Referências</button>
   </div>
 </header>
 
@@ -736,6 +737,43 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 
 </div><!-- /modo-analisador -->
 
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MODO: LOCALIZADOR DE REFERÊNCIAS (novo)                          -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="modo" id="modo-localizador">
+  <div class="card">
+    <h2>🔗 Localizar Referências no Material de Apoio</h2>
+    <p style="color:var(--cinza)">
+      Cole abaixo a sua lista de referências (formato ABNT, uma obra após a outra).
+      Em seguida, envie um ZIP com o material de apoio (pode ser uma pasta inteira
+      compactada, incluindo coletâneas) ou um link do Google Drive. O sistema varre
+      o conteúdo completo de cada arquivo e indica em qual(is) arquivo(s) cada
+      referência provavelmente está presente.
+    </p>
+
+    <label style="font-weight:600;display:block;margin:16px 0 6px;">Lista de referências</label>
+    <textarea id="loc-refs-texto" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:10px;border:1px solid var(--borda);border-radius:8px;"
+      placeholder="LASMAR, Cristiane. Inteligência policial. São Paulo: Editora X, 2010.&#10;RATCLIFFE, Jerry H. Intelligence-Led Policing. 2nd ed. Routledge, 2016."></textarea>
+    <div style="margin-top:8px;">
+      <input type="file" id="loc-refs-arquivo" accept=".txt,.docx,.doc,.pdf">
+      <span style="color:var(--cinza);font-size:13px;">(opcional: arquivo .txt/.docx com a lista de referências)</span>
+    </div>
+
+    <label style="font-weight:600;display:block;margin:20px 0 6px;">Material de apoio</label>
+    <input type="file" id="loc-material" accept=".zip,.pdf,.docx,.doc,.txt">
+    <div style="margin:8px 0;color:var(--cinza);font-size:13px;">— ou —</div>
+    <input type="text" id="loc-drive-url" style="width:100%;padding:10px;border:1px solid var(--borda);border-radius:8px;"
+      placeholder="Link do Google Drive (arquivo .zip)">
+
+    <div style="margin-top:20px;">
+      <button class="btn" onclick="locIniciar()">🔎 Localizar Referências</button>
+    </div>
+
+    <div id="loc-status" style="margin-top:16px;color:var(--cinza)"></div>
+    <div id="loc-resultado" style="margin-top:16px;"></div>
+  </div>
+</div><!-- /modo-localizador -->
+
 </main>
 
 <script>
@@ -988,8 +1026,77 @@ function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
   document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('ativo'));
   document.getElementById('modo-' + modo).classList.add('ativo');
-  const idx = modo === 'verificador' ? 0 : 1;
+  const idx = { verificador: 0, analisador: 1, localizador: 2 }[modo] || 0;
   document.querySelectorAll('.mode-tab')[idx].classList.add('ativo');
+}
+
+// ── Localizador de Referências ────────────────────────────────────────────
+async function locIniciar() {
+  const status = document.getElementById('loc-status');
+  const resultadoEl = document.getElementById('loc-resultado');
+  resultadoEl.innerHTML = '';
+  status.textContent = '⏳ Enviando…';
+
+  const form = new FormData();
+  form.append('referencias_texto', document.getElementById('loc-refs-texto').value);
+
+  const refsArquivo = document.getElementById('loc-refs-arquivo').files[0];
+  if (refsArquivo) form.append('referencias_arquivo', refsArquivo, refsArquivo.name);
+
+  const material = document.getElementById('loc-material').files[0];
+  if (material) form.append('material_apoio', material, material.name);
+
+  const driveUrl = document.getElementById('loc-drive-url').value.trim();
+  if (driveUrl) form.append('material_drive_url', driveUrl);
+
+  let resp;
+  try {
+    resp = await fetch('/iniciar-localizar-referencias', { method: 'POST', body: form });
+  } catch (err) {
+    status.textContent = '✗ Erro ao enviar: ' + err;
+    return;
+  }
+  if (!resp.ok) {
+    status.textContent = '✗ Erro do servidor: ' + await resp.text();
+    return;
+  }
+  const { job_id } = await resp.json();
+  status.textContent = '⏳ Processando…';
+
+  const poll = async () => {
+    const r = await fetch('/status-localizar-referencias/' + job_id);
+    const j = await r.json();
+    if (j.status === 'rodando') {
+      setTimeout(poll, 1500);
+      return;
+    }
+    if (j.status === 'erro') {
+      status.textContent = '✗ Erro: ' + (j.resultado?.erro || 'desconhecido');
+      return;
+    }
+    status.textContent = `✓ ${j.resultado.n_referencias} referência(s) verificada(s) em ${j.resultado.n_arquivos} arquivo(s) de apoio.`;
+    locMostrarResultado(j.resultado.itens, job_id);
+  };
+  poll();
+}
+
+function locMostrarResultado(itens, jobId) {
+  const el = document.getElementById('loc-resultado');
+  let html = '<table style="width:100%;border-collapse:collapse;margin-top:8px;">';
+  html += '<tr style="text-align:left;border-bottom:2px solid var(--borda);"><th style="padding:8px;">Referência</th><th style="padding:8px;">Arquivo(s) encontrado(s)</th></tr>';
+  for (const item of itens) {
+    const arquivos = item.arquivos.length
+      ? item.arquivos.map(nome =>
+          `<a href="/material-arquivo/${jobId}/${encodeURIComponent(nome)}" download>${nome}</a>`
+        ).join('<br>')
+      : '<span style="color:#dc2626;">— não encontrado —</span>';
+    html += `<tr style="border-bottom:1px solid var(--borda);">
+      <td style="padding:8px;">${item.referencia}</td>
+      <td style="padding:8px;">${arquivos}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
 }
 
 function anlIrPara(n) {

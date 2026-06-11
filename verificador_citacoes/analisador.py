@@ -398,6 +398,122 @@ def detectar_capitulos_docx(diss_path: str) -> list[tuple[str, str]] | None:
 
 
 # ════════════════════════════════════════════════════════════════════════
+# LOCALIZADOR DE REFERÊNCIAS NO MATERIAL DE APOIO
+# ════════════════════════════════════════════════════════════════════════
+
+# Linha de referência ABNT começa com SOBRENOME(S) em maiúsculas seguido de vírgula
+_RE_REF_AUTOR = re.compile(r"^([A-ZÀ-ÝÇ][A-ZÀ-ÝÇ\s\-'\.]{1,60}?),")
+_RE_ANO_REF = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+
+
+def parsear_lista_referencias(texto: str) -> list[str]:
+    """
+    Quebra um texto de lista de referências (ABNT) em entradas individuais.
+    Entradas começam em linhas no formato 'SOBRENOME, Nome...' — linhas
+    seguintes sem esse padrão são consideradas continuação (entradas com
+    recuo/quebra de linha).
+    """
+    refs: list[str] = []
+    atual = ""
+    for linha in texto.split("\n"):
+        l = linha.strip()
+        if not l:
+            continue
+        if _RE_REF_AUTOR.match(l):
+            if atual:
+                refs.append(atual.strip())
+            atual = l
+        else:
+            atual = f"{atual} {l}".strip() if atual else l
+    if atual:
+        refs.append(atual.strip())
+    return refs
+
+
+def _extrair_autor_ano_referencia(ref: str) -> tuple[str, str]:
+    """Extrai o(s) sobrenome(s) do(s) primeiro(s) autor(es) e o ano de uma referência."""
+    m = _RE_REF_AUTOR.match(ref.strip())
+    autor = m.group(1).strip().rstrip(".") if m else ""
+    # Em referências com múltiplos autores, considera só o primeiro sobrenome
+    autor = re.split(r"\s*;\s*|\s+E\s+|\s*&\s*", autor)[0].strip()
+    anos = _RE_ANO_REF.findall(ref)
+    ano = anos[-1] if anos else ""
+    return autor, ano
+
+
+def localizar_referencias(referencias: list[str], material: dict[str, str]) -> list[dict]:
+    """
+    Para cada referência da lista, procura nos textos do material de apoio
+    ocorrências do sobrenome do autor (e do ano, quando disponível),
+    retornando os arquivos mais prováveis de conter a obra citada.
+
+    Como os arquivos podem ser coletâneas (vários artigos em um único PDF),
+    a busca varre o texto inteiro de cada arquivo, não apenas o início.
+    """
+    materiais_lower = {nome: txt.lower() for nome, txt in material.items()}
+
+    resultados: list[dict] = []
+    for ref in referencias:
+        autor, ano = _extrair_autor_ano_referencia(ref)
+        candidatos: list[tuple[int, str]] = []
+
+        if autor:
+            autor_low = autor.lower()
+            for nome_arq, texto_low in materiais_lower.items():
+                n_autor = texto_low.count(autor_low)
+                if n_autor == 0:
+                    continue
+                score = n_autor
+                if ano and ano in material[nome_arq]:
+                    score += 5
+                candidatos.append((score, nome_arq))
+
+        candidatos.sort(key=lambda x: x[0], reverse=True)
+
+        resultados.append({
+            "referencia": ref,
+            "autor": autor or "—",
+            "ano": ano or "—",
+            "arquivos": [nome for _, nome in candidatos[:3]],
+            "encontrado": bool(candidatos),
+        })
+
+    return resultados
+
+
+def extrair_material_de_zip_com_bytes(zip_source) -> dict[str, tuple[str, bytes]]:
+    """
+    Como `extrair_material_de_zip`, mas também retorna os bytes originais de
+    cada arquivo (para permitir download direto pelo nome do arquivo).
+    Retorna dict nome_arquivo → (texto, bytes).
+    """
+    if isinstance(zip_source, (str, Path)):
+        zip_bytes = Path(zip_source).read_bytes()
+    else:
+        zip_bytes = zip_source
+
+    material: dict[str, tuple[str, bytes]] = {}
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+        for info in z.infolist():
+            nome = Path(info.filename).name
+            if nome.startswith("~$") or info.is_dir():
+                continue
+            ext = Path(info.filename).suffix.lower()
+            if ext not in EXTENSOES_APOIO:
+                continue
+            try:
+                data = z.read(info)
+                texto = _ler_bytes(data, ext)
+                if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
+                    material[nome[:80]] = (texto, data)
+            except Exception:
+                continue
+
+    return material
+
+
+# ════════════════════════════════════════════════════════════════════════
 # EXTRAÇÃO DE MATERIAL DE APOIO (ZIP)
 # ════════════════════════════════════════════════════════════════════════
 

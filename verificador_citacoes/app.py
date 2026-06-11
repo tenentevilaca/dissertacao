@@ -194,6 +194,141 @@ async def baixar_dissertacao_revisada(job_id: str):
     )
 
 
+@app.post("/iniciar-localizar-referencias")
+async def iniciar_localizar_referencias(
+    referencias_texto: str = Form(""),
+    referencias_arquivo: Optional[UploadFile] = File(None),
+    material_apoio: Optional[UploadFile] = File(None),
+    material_drive_url: str = Form(""),
+):
+    job_id = str(uuid.uuid4())
+    tmpdir = tempfile.mkdtemp(prefix=f"refs_{job_id}_")
+
+    _jobs[job_id] = {
+        "tmpdir": tmpdir,
+        "status": "rodando",
+        "tipo": "localizar_referencias",
+        "material_bytes": {},
+        "resultado": None,
+    }
+
+    refs_texto_final = referencias_texto or ""
+    refs_path: Optional[str] = None
+    if referencias_arquivo and referencias_arquivo.filename:
+        rp = Path(tmpdir) / referencias_arquivo.filename
+        rp.write_bytes(await referencias_arquivo.read())
+        refs_path = str(rp)
+
+    mat_path: Optional[str] = None
+    if material_apoio and material_apoio.filename:
+        mp = Path(tmpdir) / material_apoio.filename
+        mp.write_bytes(await material_apoio.read())
+        mat_path = str(mp)
+
+    drive_url = material_drive_url.strip() if material_drive_url else ""
+
+    threading.Thread(
+        target=_rodar_localizar_referencias,
+        args=(job_id, refs_texto_final, refs_path, mat_path, drive_url),
+        daemon=True,
+    ).start()
+
+    return {"job_id": job_id}
+
+
+@app.get("/status-localizar-referencias/{job_id}")
+async def status_localizar_referencias(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    job = _jobs[job_id]
+    return {"status": job["status"], "resultado": job.get("resultado")}
+
+
+@app.get("/material-arquivo/{job_id}/{nome_arquivo}")
+async def baixar_material_arquivo(job_id: str, nome_arquivo: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    dados = _jobs[job_id].get("material_bytes", {}).get(nome_arquivo)
+    if dados is None:
+        raise HTTPException(404, "Arquivo não encontrado")
+    from fastapi.responses import Response
+    return Response(content=dados, media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{nome_arquivo}"'
+    })
+
+
+def _rodar_localizar_referencias(
+    job_id: str,
+    refs_texto: str,
+    refs_path: Optional[str],
+    mat_path: Optional[str],
+    drive_url: str,
+):
+    try:
+        from analisador import (
+            parsear_lista_referencias,
+            localizar_referencias,
+            extrair_material_de_zip_com_bytes,
+            baixar_google_drive_bytes,
+            _ler_bytes as _ler_bytes_apoio,
+        )
+        from verificador import ler_arquivo
+
+        # ── Lista de referências ─────────────────────────────────────────
+        texto_refs = refs_texto or ""
+        if refs_path:
+            p = Path(refs_path)
+            if p.suffix.lower() == ".txt":
+                texto_refs += "\n" + p.read_text(encoding="utf-8", errors="replace")
+            else:
+                texto_refs += "\n" + ler_arquivo(p)
+
+        referencias = parsear_lista_referencias(texto_refs)
+
+        # ── Material de apoio ────────────────────────────────────────────
+        material: dict[str, str] = {}
+        material_bytes: dict[str, bytes] = {}
+
+        if mat_path:
+            mp = Path(mat_path)
+            if mp.suffix.lower() == ".zip":
+                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp).items():
+                    material[nome] = texto
+                    material_bytes[nome] = dados
+            else:
+                texto = ler_arquivo(mp)
+                if texto and len(texto) > 100:
+                    material[mp.name] = texto
+                    material_bytes[mp.name] = mp.read_bytes()
+        elif drive_url:
+            drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url)
+            if drive_ext.lower() == ".zip":
+                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_bytes).items():
+                    material[nome] = texto
+                    material_bytes[nome] = dados
+            else:
+                texto = _ler_bytes_apoio(drive_bytes, drive_ext)
+                if texto and len(texto) > 100:
+                    nome = f"arquivo_drive{drive_ext}"
+                    material[nome] = texto
+                    material_bytes[nome] = drive_bytes
+
+        resultado = localizar_referencias(referencias, material)
+
+        _jobs[job_id]["material_bytes"] = material_bytes
+        _jobs[job_id]["resultado"] = {
+            "itens": resultado,
+            "n_referencias": len(referencias),
+            "n_arquivos": len(material),
+        }
+        _jobs[job_id]["status"] = "concluido"
+
+    except Exception as exc:
+        import traceback
+        _jobs[job_id]["status"] = "erro"
+        _jobs[job_id]["resultado"] = {"erro": str(exc), "detalhe": traceback.format_exc()}
+
+
 @app.post("/iniciar")
 async def iniciar_analise(
     dissertacao: UploadFile = File(...),
