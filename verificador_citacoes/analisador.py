@@ -535,18 +535,19 @@ def localizar_referencias(
                 # não deixar sobrenomes comuns dominarem o ranking)
                 score += min(n_autor, 5)
 
-                if score > 0:
+                if score >= 10:
                     candidatos.append((score, nome_arq))
 
         candidatos.sort(key=lambda x: x[0], reverse=True)
 
         # Mantém só candidatos competitivos: o melhor, e demais apenas se
         # tiverem pontuação próxima do melhor — evita listar arquivos sem
-        # relação real com a referência.
+        # relação real com a referência. Score mínimo de 10 já exige um
+        # sinal forte (autor no nome do arquivo, ou autor+ano próximos).
         arquivos: list[str] = []
         if candidatos:
             melhor_score = candidatos[0][0]
-            limite = melhor_score * 0.6 if melhor_score >= 10 else melhor_score
+            limite = melhor_score * 0.6
             for score, nome_arq in candidatos[:3]:
                 if score >= limite:
                     arquivos.append(nome_arq)
