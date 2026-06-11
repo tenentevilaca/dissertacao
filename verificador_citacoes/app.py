@@ -76,6 +76,7 @@ async def iniciar_analise_dissertacao(
     dissertacao_drive_url: str = Form(""),
     material_apoio: Optional[UploadFile] = File(None),
     material_drive_url: str = Form(""),
+    material_localizado_job_id: str = Form(""),
     api_key: str = Form(""),
 ):
     job_id = str(uuid.uuid4())
@@ -104,11 +105,12 @@ async def iniciar_analise_dissertacao(
         material_path = str(mat_path)
 
     drive_url = material_drive_url.strip() if material_drive_url else ""
+    loc_job_id = material_localizado_job_id.strip() if material_localizado_job_id else ""
 
     loop = asyncio.get_event_loop()
     threading.Thread(
         target=_rodar_analise_dissertacao,
-        args=(job_id, str(diss_path), diss_drive, material_path, drive_url, api_key, loop),
+        args=(job_id, str(diss_path), diss_drive, material_path, drive_url, loc_job_id, api_key, loop),
         daemon=True,
     ).start()
 
@@ -198,7 +200,7 @@ async def baixar_dissertacao_revisada(job_id: str):
 async def iniciar_localizar_referencias(
     referencias_texto: str = Form(""),
     referencias_arquivo: Optional[UploadFile] = File(None),
-    material_apoio: Optional[UploadFile] = File(None),
+    material_apoio: list[UploadFile] = File(default=[]),
     material_drive_url: str = Form(""),
 ):
     job_id = str(uuid.uuid4())
@@ -209,6 +211,8 @@ async def iniciar_localizar_referencias(
         "status": "rodando",
         "tipo": "localizar_referencias",
         "material_bytes": {},
+        "material_texto": {},
+        "arquivos_relevantes": [],
         "resultado": None,
     }
 
@@ -219,17 +223,18 @@ async def iniciar_localizar_referencias(
         rp.write_bytes(await referencias_arquivo.read())
         refs_path = str(rp)
 
-    mat_path: Optional[str] = None
-    if material_apoio and material_apoio.filename:
-        mp = Path(tmpdir) / material_apoio.filename
-        mp.write_bytes(await material_apoio.read())
-        mat_path = str(mp)
+    mat_paths: list[str] = []
+    for arq in material_apoio:
+        if arq and arq.filename:
+            mp = Path(tmpdir) / arq.filename
+            mp.write_bytes(await arq.read())
+            mat_paths.append(str(mp))
 
     drive_url = material_drive_url.strip() if material_drive_url else ""
 
     threading.Thread(
         target=_rodar_localizar_referencias,
-        args=(job_id, refs_texto_final, refs_path, mat_path, drive_url),
+        args=(job_id, refs_texto_final, refs_path, mat_paths, drive_url),
         daemon=True,
     ).start()
 
@@ -261,7 +266,7 @@ def _rodar_localizar_referencias(
     job_id: str,
     refs_texto: str,
     refs_path: Optional[str],
-    mat_path: Optional[str],
+    mat_paths: list[str],
     drive_url: str,
 ):
     try:
@@ -289,7 +294,7 @@ def _rodar_localizar_referencias(
         material: dict[str, str] = {}
         material_bytes: dict[str, bytes] = {}
 
-        if mat_path:
+        for mat_path in mat_paths:
             mp = Path(mat_path)
             if mp.suffix.lower() == ".zip":
                 for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp).items():
@@ -298,9 +303,11 @@ def _rodar_localizar_referencias(
             else:
                 texto = ler_arquivo(mp)
                 if texto and len(texto) > 100:
-                    material[mp.name] = texto
-                    material_bytes[mp.name] = mp.read_bytes()
-        elif drive_url:
+                    nome = mp.name[:80]
+                    material[nome] = texto
+                    material_bytes[nome] = mp.read_bytes()
+
+        if not mat_paths and drive_url:
             drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url)
             if drive_ext.lower() == ".zip":
                 for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_bytes).items():
@@ -315,11 +322,18 @@ def _rodar_localizar_referencias(
 
         resultado = localizar_referencias(referencias, material)
 
+        arquivos_relevantes = sorted({
+            nome for item in resultado for nome in item["arquivos"]
+        })
+
         _jobs[job_id]["material_bytes"] = material_bytes
+        _jobs[job_id]["material_texto"] = material
+        _jobs[job_id]["arquivos_relevantes"] = arquivos_relevantes
         _jobs[job_id]["resultado"] = {
             "itens": resultado,
             "n_referencias": len(referencias),
             "n_arquivos": len(material),
+            "n_arquivos_relevantes": len(arquivos_relevantes),
         }
         _jobs[job_id]["status"] = "concluido"
 
@@ -441,6 +455,7 @@ def _rodar_analise_dissertacao(
     diss_drive_url: str,
     material_path: Optional[str],
     drive_url: str,
+    loc_job_id: str,
     api_key: str,
     loop: asyncio.AbstractEventLoop,
 ):
@@ -487,8 +502,15 @@ def _rodar_analise_dissertacao(
         material: dict[str, str] = {}
         destino = Path(tmpdir) / "material_extraido"
 
-        # Prioridade: arquivo enviado > URL do Drive
-        if material_path:
+        # Prioridade: material localizado (importado da aba 3) > arquivo enviado > URL do Drive
+        loc_job = _jobs.get(loc_job_id) if loc_job_id else None
+        if loc_job and loc_job.get("status") == "concluido":
+            relevantes = loc_job.get("arquivos_relevantes") or []
+            material_texto = loc_job.get("material_texto") or {}
+            material = {nome: material_texto[nome] for nome in relevantes if nome in material_texto}
+            log(f"📥 Usando {len(material)} arquivo(s) importado(s) da Localização de Referências", "etapa")
+
+        elif material_path:
             mat = Path(material_path)
             if mat.suffix.lower() == ".zip":
                 log("📦 Lendo arquivos do ZIP em memória…", "etapa")

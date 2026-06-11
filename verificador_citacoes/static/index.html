@@ -139,6 +139,61 @@ main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
 .file-badge button:hover { color: var(--vermelho); }
 #badges-ref { margin-top: 10px; min-height: 28px; }
 
+/* ── Localizador de Referências ──────────────────────────────── */
+.loc-label { font-weight: 700; display: block; margin: 22px 0 8px; color: var(--azul); font-size: .92rem; }
+.loc-textarea {
+  width: 100%; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px;
+  padding: 12px 14px; border: 1px solid var(--borda); border-radius: 10px;
+  resize: vertical; transition: border-color .2s;
+}
+.loc-textarea:focus { outline: none; border-color: var(--azul2); }
+.loc-extra { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.loc-extra span { color: var(--cinza); font-size: .82rem; }
+.loc-divider { margin: 14px 0; color: var(--cinza); font-size: .82rem; text-align: center; position: relative; }
+.loc-divider::before, .loc-divider::after {
+  content: ""; position: absolute; top: 50%; width: 42%; height: 1px; background: var(--borda);
+}
+.loc-divider::before { left: 0; }
+.loc-divider::after { right: 0; }
+.loc-input {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--borda); border-radius: 10px; font-size: .9rem;
+}
+.loc-input:focus { outline: none; border-color: var(--azul2); }
+.loc-status { margin-top: 16px; color: var(--cinza); font-weight: 600; }
+.loc-table {
+  width: 100%; border-collapse: collapse; margin-top: 12px;
+  border: 1px solid var(--borda); border-radius: 10px; overflow: hidden;
+  font-size: .88rem;
+}
+.loc-table th {
+  text-align: left; padding: 12px; background: #f1f5f9; color: var(--azul);
+  border-bottom: 2px solid var(--borda);
+}
+.loc-table td { padding: 12px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+.loc-table tr:last-child td { border-bottom: none; }
+.loc-table tr:hover td { background: #f8fafc; }
+.loc-table a { color: var(--azul2); text-decoration: none; font-weight: 600; }
+.loc-table a:hover { text-decoration: underline; }
+.loc-naoencontrado { color: #dc2626; font-style: italic; font-size: .85rem; }
+.loc-import-btn {
+  background: #16a34a; color: #fff; border: none; border-radius: 8px;
+  padding: 12px 20px; font-weight: 700; cursor: pointer; font-size: .9rem;
+}
+.loc-import-btn:hover { background: #15803d; }
+.loc-import-info {
+  margin-top: 14px; padding: 14px; background: #f0fdf4; border: 1px solid #bbf7d0;
+  border-radius: 10px; color: #166534; font-size: .88rem;
+}
+.anl-import-badge {
+  margin-top: 12px; padding: 14px; background: #f0fdf4; border: 1px solid #bbf7d0;
+  border-radius: 10px; color: #166534; font-size: .88rem; display: flex;
+  justify-content: space-between; align-items: center; gap: 12px;
+}
+.anl-import-badge button {
+  background: none; border: 1px solid #166534; color: #166534; border-radius: 6px;
+  padding: 4px 10px; cursor: pointer; font-size: .8rem;
+}
+
 /* ── Form fields ──────────────────────────────────────────── */
 label { display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px; color: #334155; }
 input[type=password], input[type=text] {
@@ -596,6 +651,9 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         Escolha como prefere enviar:
       </p>
 
+      <div id="anl-import-badge" class="anl-import-badge" style="display:none"></div>
+
+      <div id="anl-painel-material-normal">
       <!-- Seletor de origem -->
       <div style="display:flex;gap:0;border:1px solid var(--borda);border-radius:10px;overflow:hidden;margin-bottom:20px;">
         <button id="anl-tab-upload" onclick="anlTrocarOrigemMat('upload')"
@@ -658,6 +716,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
           Ideal para pastas grandes (até 1 GB).
         </div>
       </div>
+      </div><!-- /anl-painel-material-normal -->
 
       <div class="btn-row" style="margin-top:20px">
         <button class="btn btn-outline" onclick="anlIrPara(1)">← Voltar</button>
@@ -743,33 +802,41 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 <div class="modo" id="modo-localizador">
   <div class="card">
     <h2>🔗 Localizar Referências no Material de Apoio</h2>
-    <p style="color:var(--cinza)">
+    <p style="color:var(--cinza);line-height:1.6">
       Cole abaixo a sua lista de referências (formato ABNT, uma obra após a outra).
-      Em seguida, envie um ZIP com o material de apoio (pode ser uma pasta inteira
-      compactada, incluindo coletâneas) ou um link do Google Drive. O sistema varre
-      o conteúdo completo de cada arquivo e indica em qual(is) arquivo(s) cada
-      referência provavelmente está presente.
+      Em seguida, envie os arquivos de apoio — avulsos, um ou mais ZIPs (pode ser
+      uma pasta inteira compactada, incluindo coletâneas) — ou um link do Google
+      Drive. O sistema varre o conteúdo completo de cada arquivo e indica em
+      qual(is) arquivo(s) cada referência provavelmente está presente.
     </p>
 
-    <label style="font-weight:600;display:block;margin:16px 0 6px;">Lista de referências</label>
-    <textarea id="loc-refs-texto" rows="8" style="width:100%;font-family:monospace;font-size:13px;padding:10px;border:1px solid var(--borda);border-radius:8px;"
+    <label class="loc-label">📑 Lista de referências</label>
+    <textarea id="loc-refs-texto" rows="8" class="loc-textarea"
       placeholder="LASMAR, Cristiane. Inteligência policial. São Paulo: Editora X, 2010.&#10;RATCLIFFE, Jerry H. Intelligence-Led Policing. 2nd ed. Routledge, 2016."></textarea>
-    <div style="margin-top:8px;">
+    <div class="loc-extra">
       <input type="file" id="loc-refs-arquivo" accept=".txt,.docx,.doc,.pdf">
-      <span style="color:var(--cinza);font-size:13px;">(opcional: arquivo .txt/.docx com a lista de referências)</span>
+      <span>(opcional: arquivo .txt/.docx/.pdf com a lista de referências)</span>
     </div>
 
-    <label style="font-weight:600;display:block;margin:20px 0 6px;">Material de apoio</label>
-    <input type="file" id="loc-material" accept=".zip,.pdf,.docx,.doc,.txt">
-    <div style="margin:8px 0;color:var(--cinza);font-size:13px;">— ou —</div>
-    <input type="text" id="loc-drive-url" style="width:100%;padding:10px;border:1px solid var(--borda);border-radius:8px;"
+    <label class="loc-label">📂 Material de apoio</label>
+    <div class="dropzone" id="loc-drop-material">
+      <input type="file" id="loc-material" accept=".zip,.pdf,.docx,.doc,.txt" multiple onchange="locAtualizarBadges()">
+      <div class="icon">🗂️</div>
+      <strong>Clique ou arraste arquivos aqui</strong>
+      <p>Arquivos avulsos (PDF/DOCX/TXT), um ou mais ZIPs — pode selecionar vários de uma vez</p>
+    </div>
+    <div id="loc-material-badges"></div>
+
+    <div class="loc-divider">— ou —</div>
+    <input type="text" id="loc-drive-url" class="loc-input"
       placeholder="Link do Google Drive (arquivo .zip)">
 
-    <div style="margin-top:20px;">
+    <div style="margin-top:24px;">
       <button class="btn" onclick="locIniciar()">🔎 Localizar Referências</button>
     </div>
 
-    <div id="loc-status" style="margin-top:16px;color:var(--cinza)"></div>
+    <div id="loc-status" class="loc-status"></div>
+    <div id="loc-import" style="margin-top:8px;"></div>
     <div id="loc-resultado" style="margin-top:16px;"></div>
   </div>
 </div><!-- /modo-localizador -->
@@ -1020,7 +1087,29 @@ function reiniciarVerif() {
 // ANALISADOR DE DISSERTAÇÃO
 // ════════════════════════════════════════════════════════════════════
 
-const anlEstado = { passo: 1, fileDiss: null, dissDriveUrl: '', fileMat: null, driveUrl: '', jobId: null };
+const anlEstado = { passo: 1, fileDiss: null, dissDriveUrl: '', fileMat: null, driveUrl: '', jobId: null,
+                     materialLocalizadoJobId: null, materialLocalizadoCount: 0 };
+
+function anlAtualizarBadgeImportado() {
+  const el = document.getElementById('anl-import-badge');
+  const painel = document.getElementById('anl-painel-material-normal');
+  if (anlEstado.materialLocalizadoJobId) {
+    el.innerHTML = `
+      <span>📥 Usando <b>${anlEstado.materialLocalizadoCount}</b> arquivo(s) importado(s) da aba "Localizar Referências" — a análise semântica será restrita a eles.</span>
+      <button onclick="anlRemoverMaterialImportado()">Remover</button>`;
+    el.style.display = 'flex';
+    painel.style.display = 'none';
+  } else {
+    el.style.display = 'none';
+    painel.style.display = '';
+  }
+}
+
+function anlRemoverMaterialImportado() {
+  anlEstado.materialLocalizadoJobId = null;
+  anlEstado.materialLocalizadoCount = 0;
+  anlAtualizarBadgeImportado();
+}
 
 function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
@@ -1031,10 +1120,21 @@ function mudarModo(modo) {
 }
 
 // ── Localizador de Referências ────────────────────────────────────────────
+function locAtualizarBadges() {
+  const arquivos = document.getElementById('loc-material').files;
+  const el = document.getElementById('loc-material-badges');
+  if (!arquivos.length) { el.innerHTML = ''; return; }
+  el.innerHTML = Array.from(arquivos).map(f =>
+    `<span class="file-badge">📄 ${f.name}</span>`
+  ).join('');
+}
+
 async function locIniciar() {
   const status = document.getElementById('loc-status');
   const resultadoEl = document.getElementById('loc-resultado');
+  const importEl = document.getElementById('loc-import');
   resultadoEl.innerHTML = '';
+  importEl.innerHTML = '';
   status.textContent = '⏳ Enviando…';
 
   const form = new FormData();
@@ -1043,8 +1143,8 @@ async function locIniciar() {
   const refsArquivo = document.getElementById('loc-refs-arquivo').files[0];
   if (refsArquivo) form.append('referencias_arquivo', refsArquivo, refsArquivo.name);
 
-  const material = document.getElementById('loc-material').files[0];
-  if (material) form.append('material_apoio', material, material.name);
+  const arquivos = document.getElementById('loc-material').files;
+  for (const f of arquivos) form.append('material_apoio', f, f.name);
 
   const driveUrl = document.getElementById('loc-drive-url').value.trim();
   if (driveUrl) form.append('material_drive_url', driveUrl);
@@ -1075,28 +1175,47 @@ async function locIniciar() {
       return;
     }
     status.textContent = `✓ ${j.resultado.n_referencias} referência(s) verificada(s) em ${j.resultado.n_arquivos} arquivo(s) de apoio.`;
-    locMostrarResultado(j.resultado.itens, job_id);
+    locMostrarResultado(j.resultado, job_id);
   };
   poll();
 }
 
-function locMostrarResultado(itens, jobId) {
+function locMostrarResultado(resultado, jobId) {
+  const itens = resultado.itens;
   const el = document.getElementById('loc-resultado');
-  let html = '<table style="width:100%;border-collapse:collapse;margin-top:8px;">';
-  html += '<tr style="text-align:left;border-bottom:2px solid var(--borda);"><th style="padding:8px;">Referência</th><th style="padding:8px;">Arquivo(s) encontrado(s)</th></tr>';
+  let html = '<table class="loc-table">';
+  html += '<tr><th>Referência</th><th>Arquivo(s) encontrado(s)</th></tr>';
   for (const item of itens) {
     const arquivos = item.arquivos.length
       ? item.arquivos.map(nome =>
           `<a href="/material-arquivo/${jobId}/${encodeURIComponent(nome)}" download>${nome}</a>`
         ).join('<br>')
-      : '<span style="color:#dc2626;">— não encontrado —</span>';
-    html += `<tr style="border-bottom:1px solid var(--borda);">
-      <td style="padding:8px;">${item.referencia}</td>
-      <td style="padding:8px;">${arquivos}</td>
+      : '<span class="loc-naoencontrado">— não encontrado —</span>';
+    html += `<tr>
+      <td>${item.referencia}</td>
+      <td>${arquivos}</td>
     </tr>`;
   }
   html += '</table>';
   el.innerHTML = html;
+
+  const importEl = document.getElementById('loc-import');
+  if (resultado.n_arquivos_relevantes > 0) {
+    importEl.innerHTML = `
+      <button class="loc-import-btn" onclick="locImportarParaAnalise('${jobId}', ${resultado.n_arquivos_relevantes})">
+        📥 Importar ${resultado.n_arquivos_relevantes} arquivo(s) para Análise da Dissertação
+      </button>`;
+  } else {
+    importEl.innerHTML = '';
+  }
+}
+
+function locImportarParaAnalise(jobId, n) {
+  anlEstado.materialLocalizadoJobId = jobId;
+  anlEstado.materialLocalizadoCount = n;
+  mudarModo('analisador');
+  anlIrPara(2);
+  anlAtualizarBadgeImportado();
 }
 
 function anlIrPara(n) {
@@ -1279,8 +1398,12 @@ async function anlIniciarAnalise() {
     form.append('dissertacao', new Blob([''], {type:'application/octet-stream'}), '_drive_placeholder.docx');
   }
   if (anlEstado.dissDriveUrl) form.append('dissertacao_drive_url', anlEstado.dissDriveUrl);
-  if (anlEstado.fileMat) form.append('material_apoio', anlEstado.fileMat, anlEstado.fileMat.name);
-  if (anlEstado.driveUrl) form.append('material_drive_url', anlEstado.driveUrl);
+  if (anlEstado.materialLocalizadoJobId) {
+    form.append('material_localizado_job_id', anlEstado.materialLocalizadoJobId);
+  } else {
+    if (anlEstado.fileMat) form.append('material_apoio', anlEstado.fileMat, anlEstado.fileMat.name);
+    if (anlEstado.driveUrl) form.append('material_drive_url', anlEstado.driveUrl);
+  }
   form.append('api_key', document.getElementById('anl-apikey').value.trim());
 
   let resp;
@@ -1397,6 +1520,8 @@ function anlReiniciar() {
   if (anlEstado.jobId) fetch('/job/' + anlEstado.jobId, { method: 'DELETE' }).catch(() => {});
   anlEstado.fileDiss = null; anlEstado.fileMat = null; anlEstado.driveUrl = ''; anlEstado.jobId = null;
   anlEstado.analisando = false;
+  anlEstado.materialLocalizadoJobId = null; anlEstado.materialLocalizadoCount = 0;
+  anlAtualizarBadgeImportado();
   document.getElementById('anl-badge-diss').innerHTML = '';
   document.getElementById('anl-badge-mat').innerHTML = '';
   document.getElementById('anl-file-diss').value = '';
