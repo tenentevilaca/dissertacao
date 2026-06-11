@@ -455,7 +455,7 @@ def localizar_referencias(referencias: list[str], material: dict[str, str]) -> l
     resultados: list[dict] = []
     for ref in referencias:
         autor, ano = _extrair_autor_ano_referencia(ref)
-        candidatos: list[tuple[int, str]] = []
+        candidatos: list[tuple[float, str]] = []
 
         if autor:
             autor_low = autor.lower()
@@ -463,19 +463,52 @@ def localizar_referencias(referencias: list[str], material: dict[str, str]) -> l
                 n_autor = texto_low.count(autor_low)
                 if n_autor == 0:
                     continue
-                score = n_autor
-                if ano and ano in material[nome_arq]:
-                    score += 5
-                candidatos.append((score, nome_arq))
+
+                # Se o ano da referência é conhecido mas NÃO aparece em
+                # lugar nenhum do arquivo, é forte indício de obra errada.
+                if ano and ano not in material[nome_arq]:
+                    continue
+
+                score = 0.0
+
+                # Sinal forte: nome do autor está no PRÓPRIO nome do arquivo
+                if autor_low in Path(nome_arq).stem.lower():
+                    score += 50
+
+                # Sinal forte: autor e ano aparecem próximos um do outro
+                # (capa/cabeçalho do arquivo, ou citação da própria obra)
+                if ano:
+                    for m in re.finditer(re.escape(autor_low), texto_low):
+                        janela = texto_low[max(0, m.start() - 150): m.end() + 150]
+                        if ano in janela:
+                            score += 10
+
+                # Sinal fraco: ocorrências avulsas do sobrenome (capado para
+                # não deixar sobrenomes comuns dominarem o ranking)
+                score += min(n_autor, 5)
+
+                if score > 0:
+                    candidatos.append((score, nome_arq))
 
         candidatos.sort(key=lambda x: x[0], reverse=True)
+
+        # Mantém só candidatos competitivos: o melhor, e demais apenas se
+        # tiverem pontuação próxima do melhor — evita listar arquivos sem
+        # relação real com a referência.
+        arquivos: list[str] = []
+        if candidatos:
+            melhor_score = candidatos[0][0]
+            limite = melhor_score * 0.6 if melhor_score >= 10 else melhor_score
+            for score, nome_arq in candidatos[:3]:
+                if score >= limite:
+                    arquivos.append(nome_arq)
 
         resultados.append({
             "referencia": ref,
             "autor": autor or "—",
             "ano": ano or "—",
-            "arquivos": [nome for _, nome in candidatos[:3]],
-            "encontrado": bool(candidatos),
+            "arquivos": arquivos,
+            "encontrado": bool(arquivos),
         })
 
     return resultados
