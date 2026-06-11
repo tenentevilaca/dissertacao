@@ -559,6 +559,34 @@ def localizar_referencias(
             if escolhido:
                 arquivos = [escolhido]
 
+        # Nenhum sinal forte de nome de arquivo/proximidade autor+ano: o
+        # autor e/ou título da obra podem aparecer no CONTEÚDO do arquivo
+        # com nome diferente (ex.: "documento1.pdf"). Se há chave de API,
+        # monta uma lista de candidatos "fracos" (autor citado em algum
+        # lugar e/ou palavras do título presentes) e pede à IA para ler o
+        # conteúdo e decidir se algum deles é a obra referenciada.
+        if not arquivos and api_key.strip():
+            titulo_palavras = [
+                p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", ref.lower())
+                if p not in _STOPWORDS_PT
+            ][:8]
+            fracos: list[tuple[float, str]] = []
+            for nome_arq, texto_low in materiais_lower.items():
+                pontos = 0.0
+                if autor:
+                    pontos += texto_low.count(autor.lower()) * 2
+                if ano and ano in material[nome_arq]:
+                    pontos += 1
+                pontos += sum(1 for p in titulo_palavras if p in texto_low[:3000])
+                if pontos > 0:
+                    fracos.append((pontos, nome_arq))
+            fracos.sort(key=lambda x: -x[0])
+            candidatos_fracos = [nome for _, nome in fracos[:6]]
+            if candidatos_fracos:
+                escolhido = _desambiguar_com_ia(ref, candidatos_fracos, material, api_key)
+                if escolhido:
+                    arquivos = [escolhido]
+
         resultados.append({
             "referencia": ref,
             "autor": autor or "—",
