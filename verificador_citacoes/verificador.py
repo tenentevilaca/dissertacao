@@ -23,6 +23,37 @@ from xml.etree import ElementTree as ET
 _NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 
+def _xml_para_paragrafos(xml_bytes: bytes) -> list[tuple[str, str]]:
+    """Extrai (texto, estilo_do_paragrafo) de cada <w:p> de um XML do Word."""
+    try:
+        root = ET.fromstring(xml_bytes)
+        paragrafos = []
+        for para in root.iter(f"{{{_NS}}}p"):
+            tokens = [t.text for t in para.iter(f"{{{_NS}}}t") if t.text]
+            texto = "".join(tokens)
+            estilo = ""
+            ppr = para.find(f"{{{_NS}}}pPr")
+            if ppr is not None:
+                pstyle = ppr.find(f"{{{_NS}}}pStyle")
+                if pstyle is not None:
+                    estilo = pstyle.get(f"{{{_NS}}}val", "") or ""
+            paragrafos.append((texto, estilo))
+        return paragrafos
+    except Exception:
+        return []
+
+
+def ler_docx_paragrafos(caminho: str | Path) -> list[tuple[str, str]]:
+    """Lê o corpo de um .docx e retorna lista de (texto, estilo) por parágrafo."""
+    try:
+        with zipfile.ZipFile(str(caminho)) as z:
+            if "word/document.xml" in z.namelist():
+                return _xml_para_paragrafos(z.read("word/document.xml"))
+    except Exception:
+        pass
+    return []
+
+
 def _xml_para_texto(xml_bytes: bytes) -> str:
     """Extrai texto parágrafo a parágrafo de um XML do Word."""
     try:

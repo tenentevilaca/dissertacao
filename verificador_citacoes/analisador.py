@@ -13,7 +13,7 @@ from typing import Optional
 import anthropic
 
 # ── Importações do módulo irmão ──────────────────────────────────────────
-from verificador import ler_docx, ler_arquivo, _extrair_trecho_relevante, _STOPWORDS_PT
+from verificador import ler_docx, ler_arquivo, ler_docx_paragrafos, _extrair_trecho_relevante, _STOPWORDS_PT
 
 _MAX_CHARS_CAP   = 14_000
 _MAX_CHARS_META  = 7_000
@@ -349,6 +349,54 @@ def detectar_capitulos(texto: str) -> list[tuple[str, str]]:
     return capitulos if capitulos else [("Dissertação Completa", texto[:_MAX_CHARS_CAP])]
 
 
+# Estilos de parágrafo do Word reconhecidos como títulos de capítulo (nível 1-3)
+_RE_ESTILO_TITULO = re.compile(r"^(?:heading|título|titulo|ttulo)\s*[123]$", re.IGNORECASE)
+
+
+def detectar_capitulos_docx(diss_path: str) -> list[tuple[str, str]] | None:
+    """
+    Detecção de capítulos baseada nos estilos de parágrafo (Heading 1/2/3) do
+    .docx — muito mais confiável que heurísticas de texto puro, pois não
+    confunde entradas de sumário/TOC com capítulos reais e captura corretamente
+    todos os capítulos, inclusive os iniciais (Introdução, Justificativa,
+    Referencial Teórico etc.).
+
+    Retorna None se o arquivo não tiver parágrafos com estilo de título
+    suficientes (ex.: docx sem estilos definidos), para que o chamador use o
+    fallback heurístico baseado em texto.
+    """
+    paragrafos = ler_docx_paragrafos(diss_path)
+    if not paragrafos:
+        return None
+
+    cortes: list[tuple[int, str]] = []
+    for i, (texto_p, estilo) in enumerate(paragrafos):
+        stripped = (texto_p or "").strip()
+        if not stripped or len(stripped) > 150:
+            continue
+        if _RE_ESTILO_TITULO.match(estilo or ""):
+            upper = stripped.upper()
+            if upper in _SECOES_IGNORAR:
+                continue
+            cortes.append((i, stripped))
+
+    # Exige um número mínimo de títulos para considerar a estrutura confiável
+    if len(cortes) < 3:
+        return None
+
+    capitulos: list[tuple[str, str]] = []
+    for k, (idx, titulo) in enumerate(cortes):
+        inicio = idx + 1
+        fim = cortes[k + 1][0] if k + 1 < len(cortes) else len(paragrafos)
+        conteudo = "\n".join(
+            p for p, _ in paragrafos[inicio:fim] if p.strip()
+        ).strip()
+        if len(conteudo) > 150:
+            capitulos.append((titulo, conteudo))
+
+    return capitulos if capitulos else None
+
+
 # ════════════════════════════════════════════════════════════════════════
 # EXTRAÇÃO DE MATERIAL DE APOIO (ZIP)
 # ════════════════════════════════════════════════════════════════════════
@@ -565,7 +613,11 @@ def analisar_dissertacao(
 
     # ── Etapa 3: Detecção de capítulos ──────────────────────────────────
     log_fn("📑 ETAPA 3: Detectando estrutura de capítulos…", "etapa")
-    capitulos = detectar_capitulos(texto)
+    capitulos = detectar_capitulos_docx(diss_path)
+    if capitulos:
+        log_fn(f"   (estrutura obtida pelos estilos de título do .docx)")
+    else:
+        capitulos = detectar_capitulos(texto)
     log_fn(f"   {len(capitulos)} capítulo(s) / seção(ões) detectado(s)")
     for titulo_cap, conteudo in capitulos[:5]:
         log_fn(f"   • {titulo_cap[:60]} ({len(conteudo):,} chars)")
