@@ -441,7 +441,55 @@ def _extrair_autor_ano_referencia(ref: str) -> tuple[str, str]:
     return autor, ano
 
 
-def localizar_referencias(referencias: list[str], material: dict[str, str]) -> list[dict]:
+_PROMPT_DESAMBIGUAR_REF = """Você está ajudando a localizar, entre arquivos de apoio de uma dissertação, qual arquivo corresponde a uma determinada referência bibliográfica.
+
+REFERÊNCIA: {referencia}
+
+Abaixo estão trechos de {n} arquivo(s) candidatos (cada um pode ser uma coletânea com vários textos):
+
+{candidatos}
+
+Qual arquivo é (ou contém) a obra citada na referência acima? Responda SOMENTE com JSON:
+{{"indice": <número do arquivo correto, 0 se nenhum corresponder>, "justificativa": "uma frase curta"}}
+"""
+
+
+def _desambiguar_com_ia(
+    ref: str,
+    candidatos_nomes: list[str],
+    material: dict[str, str],
+    api_key: str,
+) -> Optional[str]:
+    """Usa IA (modelo barato) para escolher, entre candidatos empatados, qual
+    arquivo realmente corresponde à referência. Retorna o nome do arquivo
+    escolhido, ou None se nenhum corresponder / em caso de erro."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    blocos = []
+    for i, nome in enumerate(candidatos_nomes, 1):
+        trecho = material[nome][:1500]
+        blocos.append(f"ARQUIVO {i}: {nome}\n\"\"\"{trecho}\"\"\"")
+
+    prompt = _PROMPT_DESAMBIGUAR_REF.format(
+        referencia=ref, n=len(candidatos_nomes), candidatos="\n\n".join(blocos)
+    )
+
+    try:
+        resultado = _chamar_claude(client, prompt, max_tokens=200, model="claude-haiku-4-5")
+        idx = resultado.get("indice", 0)
+        if isinstance(idx, int) and 1 <= idx <= len(candidatos_nomes):
+            return candidatos_nomes[idx - 1]
+    except Exception:
+        pass
+    return None
+
+
+def localizar_referencias(
+    referencias: list[str],
+    material: dict[str, str],
+    api_key: str = "",
+) -> list[dict]:
     """
     Para cada referência da lista, procura nos textos do material de apoio
     ocorrências do sobrenome do autor (e do ano, quando disponível),
@@ -502,6 +550,13 @@ def localizar_referencias(referencias: list[str], material: dict[str, str]) -> l
             for score, nome_arq in candidatos[:3]:
                 if score >= limite:
                     arquivos.append(nome_arq)
+
+        # Caso ambíguo (mais de um candidato competitivo) e temos chave de
+        # API: pede para a IA (modelo barato) escolher o arquivo correto.
+        if api_key.strip() and len(arquivos) > 1:
+            escolhido = _desambiguar_com_ia(ref, arquivos, material, api_key)
+            if escolhido:
+                arquivos = [escolhido]
 
         resultados.append({
             "referencia": ref,

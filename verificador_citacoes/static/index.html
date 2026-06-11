@@ -831,6 +831,10 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     <input type="text" id="loc-drive-url" class="loc-input"
       placeholder="Link do Google Drive (arquivo .zip)">
 
+    <label class="loc-label" style="margin-top:16px;display:block;">🔑 Chave de API Claude (opcional)</label>
+    <input type="password" id="loc-apikey" class="loc-input"
+      placeholder="Se informada, a IA ajuda a desempatar arquivos candidatos">
+
     <div style="margin-top:24px;">
       <button class="btn" onclick="locIniciar()">🔎 Localizar Referências</button>
     </div>
@@ -1148,6 +1152,8 @@ async function locIniciar() {
 
   const driveUrl = document.getElementById('loc-drive-url').value.trim();
   if (driveUrl) form.append('material_drive_url', driveUrl);
+
+  form.append('api_key', document.getElementById('loc-apikey').value.trim());
 
   let resp;
   try {

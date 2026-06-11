@@ -202,6 +202,7 @@ async def iniciar_localizar_referencias(
     referencias_arquivo: Optional[UploadFile] = File(None),
     material_apoio: list[UploadFile] = File(default=[]),
     material_drive_url: str = Form(""),
+    api_key: str = Form(""),
 ):
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"refs_{job_id}_")
@@ -234,7 +235,7 @@ async def iniciar_localizar_referencias(
 
     threading.Thread(
         target=_rodar_localizar_referencias,
-        args=(job_id, refs_texto_final, refs_path, mat_paths, drive_url),
+        args=(job_id, refs_texto_final, refs_path, mat_paths, drive_url, api_key.strip()),
         daemon=True,
     ).start()
 
@@ -268,6 +269,7 @@ def _rodar_localizar_referencias(
     refs_path: Optional[str],
     mat_paths: list[str],
     drive_url: str,
+    api_key: str = "",
 ):
     try:
         from analisador import (
@@ -320,7 +322,7 @@ def _rodar_localizar_referencias(
                     material[nome] = texto
                     material_bytes[nome] = drive_bytes
 
-        resultado = localizar_referencias(referencias, material)
+        resultado = localizar_referencias(referencias, material, api_key)
 
         arquivos_relevantes = sorted({
             nome for item in resultado for nome in item["arquivos"]
