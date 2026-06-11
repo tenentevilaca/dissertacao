@@ -194,47 +194,46 @@ Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
 Onde "avaliacao"/"status"/"pontuacao_geral" usam apenas: APROVADO | APROVADO_COM_RESSALVAS | REQUER_REVISAO | ADEQUADA | INSUFICIENTE | AUSENTE | INTEGRADA | PARCIAL | OK | COM_PROBLEMAS
 """
 
-_PROMPT_APOIO = """Você é um assistente de pesquisa acadêmica fazendo VERIFICAÇÃO DE CONSONÂNCIA SEMÂNTICA entre uma dissertação e suas obras de apoio.
+_PROMPT_COESAO = """Você é um orientador acadêmico revisando a COESÃO INTERNA de uma dissertação brasileira —
+ou seja, como as ideias se encadeiam do geral para o específico e se há repetições/redundâncias entre o capítulo
+atual e o restante do texto.
 
-CAPÍTULO: «{titulo_cap}»
-
-TRECHO DO CAPÍTULO QUE PRECISA DE VALIDAÇÃO:
+RESUMO DOS DEMAIS CAPÍTULOS (título + trecho inicial de cada um):
 \"\"\"
-{trecho_cap}
-\"\"\"
-
-TRECHOS DAS OBRAS DE APOIO DISPONÍVEIS (com nome do arquivo de origem):
-\"\"\"
-{trechos_apoio}
+{resumo_outros}
 \"\"\"
 
-Para cada citação ou argumento do capítulo que se relacione com as obras de apoio, avalie:
-(a) FIDELIDADE — o capítulo reproduz corretamente o argumento da fonte?
-(b) ATRIBUIÇÃO — o conteúdo é da autoria indicada ou de outra fonte?
-(c) DIREÇÃO ARGUMENTATIVA — a fonte sustenta o argumento ou o contradiz?
+CAPÍTULO EM ANÁLISE: «{titulo_cap}»
+
+TEXTO DO CAPÍTULO (até {n_chars} caracteres):
+\"\"\"
+{texto_cap}
+\"\"\"
+
+Avalie:
+(a) REPETIÇÕES — ideias, definições, citações ou explicações que já aparecem em outro capítulo e são repetidas aqui sem necessidade.
+(b) FLUXO GERAL→ESPECÍFICO — o capítulo introduz conceitos gerais antes dos específicos, na ordem adequada para sua posição na dissertação?
+(c) ENCADEAMENTO — o capítulo se conecta com naturalidade ao que veio antes e prepara o que vem depois?
 
 Retorne SOMENTE um JSON válido (sem markdown, sem texto antes ou depois):
 {{
-  "pares_encontrados": [
+  "redundancias": [
     {{
-      "argumento_dissertacao": "argumento ou afirmação do capítulo (cite diretamente)",
-      "trecho_apoio": "trecho exato do material que se relaciona (até 300 chars)",
-      "arquivo_fonte": "nome do arquivo de onde veio o trecho",
-      "autor_ano": "Sobrenome, Ano (estimado a partir do nome do arquivo/conteúdo, ou null)",
-      "relacao": "VALIDA",
-      "classificacao": "PLENAMENTE_CONSONANTE",
-      "explicacao": "por que valida/contradiz/complementa, e recomendação de correção se houver problema"
+      "trecho_atual": "trecho deste capítulo que repete algo (cite diretamente, até 300 chars)",
+      "capitulo_relacionado": "título do capítulo onde a ideia já aparece",
+      "sugestao": "manter onde, remover ou resumir aqui, com breve justificativa"
     }}
   ],
-  "cobertura": "ALTA",
-  "sintese": "Em 2-3 frases: avaliação geral do suporte do material de apoio para este capítulo."
+  "fluxo_geral_especifico": "ADEQUADO",
+  "observacoes_fluxo": "breve avaliação da progressão geral→específico deste capítulo",
+  "encadeamento": "ADEQUADO",
+  "observacoes_encadeamento": "breve avaliação da transição com capítulos vizinhos",
+  "sintese": "Em 2-3 frases: avaliação geral da coesão deste capítulo com o restante da dissertação."
 }}
 
-Onde "relacao" usa: VALIDA | CONTRADIZ | COMPLEMENTA
-Onde "classificacao" usa: PLENAMENTE_CONSONANTE | CONSONANTE_COM_RESSALVA | IMPRECISAO_ATRIBUICAO | DISTORCAO_PARCIAL | DISTORCAO_GRAVE
-Onde "cobertura" usa: ALTA | MEDIA | BAIXA | NENHUMA
+Onde "fluxo_geral_especifico" e "encadeamento" usam: ADEQUADO | PARCIAL | INADEQUADO
 
-REGRA: não invente conteúdo. Se a obra de apoio não contiver o argumento atribuído a ela, registre a ausência com precisão.
+REGRA: não invente conteúdo. Cite apenas trechos que de fato aparecem nos textos fornecidos.
 """
 
 
@@ -767,44 +766,38 @@ def analisar_capitulo(
     return _chamar_claude(client, prompt, max_tokens=3000)
 
 
-def buscar_argumentos_apoio(
+_MAX_CHARS_COESAO = 4000
+
+
+def _resumo_outros_capitulos(capitulos: list[tuple[str, str]], idx_atual: int, max_chars_cada: int = 600) -> str:
+    blocos = []
+    for i, (titulo, conteudo) in enumerate(capitulos):
+        if i == idx_atual:
+            continue
+        blocos.append(f"[{titulo}]\n{conteudo[:max_chars_cada]}")
+    return "\n\n---\n\n".join(blocos)
+
+
+def analisar_coesao_capitulo(
     titulo_cap: str,
     texto_cap: str,
-    material: dict[str, str],
+    resumo_outros: str,
     api_key: str,
 ) -> dict:
-    if not material:
-        return {"pares_encontrados": [], "cobertura": "NENHUMA",
-                "sintese": "Nenhum material de apoio disponível."}
-
-    # Usa a função já testada do verificador para encontrar trecho relevante
-    # Agrega os top-3 documentos mais relevantes
-    trechos_selecionados: list[str] = []
-    chars_usados = 0
-
-    for nome_arq, texto_arq in material.items():
-        trecho = _extrair_trecho_relevante(texto_cap, texto_arq, janela=2000)
-        if trecho.strip() and len(trecho.strip()) > 100:
-            bloco = f"[ARQUIVO: {nome_arq}]\n{trecho}"
-            if chars_usados + len(bloco) <= _MAX_CHARS_APOIO * 3:
-                trechos_selecionados.append(bloco)
-                chars_usados += len(bloco)
-        if chars_usados >= _MAX_CHARS_APOIO * 3:
-            break
-
-    if not trechos_selecionados:
-        return {"pares_encontrados": [], "cobertura": "NENHUMA",
-                "sintese": "Nenhum trecho relevante encontrado no material de apoio."}
-
-    trechos_apoio = "\n\n---\n\n".join(trechos_selecionados)
+    if not resumo_outros.strip():
+        return {"redundancias": [], "fluxo_geral_especifico": "ADEQUADO",
+                "observacoes_fluxo": "", "encadeamento": "ADEQUADO",
+                "observacoes_encadeamento": "",
+                "sintese": "Capítulo único — não há outros capítulos para comparar."}
 
     client = anthropic.Anthropic(api_key=api_key)
-    prompt = _PROMPT_APOIO.format(
+    prompt = _PROMPT_COESAO.format(
+        resumo_outros=resumo_outros[:_MAX_CHARS_COESAO * 2],
         titulo_cap=titulo_cap,
-        trecho_cap=texto_cap[:2000],
-        trechos_apoio=trechos_apoio[:_MAX_CHARS_APOIO * 3],
+        texto_cap=texto_cap[:_MAX_CHARS_COESAO],
+        n_chars=_MAX_CHARS_COESAO,
     )
-    return _chamar_claude(client, prompt, max_tokens=3000)
+    return _chamar_claude(client, prompt, max_tokens=2000)
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -813,7 +806,6 @@ def buscar_argumentos_apoio(
 
 def analisar_dissertacao(
     diss_path: str,
-    material: dict[str, str],
     api_key: str,
     log_fn,
 ) -> dict:
@@ -822,8 +814,8 @@ def analisar_dissertacao(
       1. Lê dissertação
       2. Extrai metadados via IA
       3. Detecta capítulos
-      4. Analisa cada capítulo via IA
-      5. Busca argumentos de apoio no material
+      4. Analisa cada capítulo via IA (qualidade/estrutura)
+      5. Analisa coesão interna: redundâncias e fluxo geral→específico
     """
 
     # ── Etapa 1: Leitura ────────────────────────────────────────────────
@@ -862,7 +854,6 @@ def analisar_dissertacao(
     # ── Etapas 4+5: Análise por capítulo ────────────────────────────────
     resultados_caps: list[dict] = []
     total = len(capitulos)
-    n_mat = len(material)
 
     for i, (titulo_cap, conteudo) in enumerate(capitulos, 1):
         log_fn(f"🤖 [{i}/{total}] Analisando: «{titulo_cap[:55]}»…", "etapa")
@@ -879,49 +870,35 @@ def analisar_dissertacao(
             log_fn(f"   ✗ Erro na análise: {e}", "warn")
             analise = {"titulo_capitulo": titulo_cap, "_erro": str(e)}
 
-        # Busca de argumentos de apoio
-        apoio: dict = {}
-        if n_mat > 0:
-            log_fn(f"   🔎 Buscando argumentos de apoio ({n_mat} arquivo(s))…")
+        # Análise de coesão interna (redundâncias + fluxo geral→específico)
+        coesao: dict = {}
+        if total > 1:
+            log_fn("   🔎 Verificando coesão com os demais capítulos…")
             try:
-                apoio = buscar_argumentos_apoio(titulo_cap, conteudo, material, api_key)
-                n_pares = len(apoio.get("pares_encontrados") or [])
-                cobertura = apoio.get("cobertura", "—")
-                log_fn(f"   {n_pares} par(es) encontrado(s) | cobertura: {cobertura}")
+                resumo_outros = _resumo_outros_capitulos(capitulos, i - 1)
+                coesao = analisar_coesao_capitulo(titulo_cap, conteudo, resumo_outros, api_key)
+                n_red = len(coesao.get("redundancias") or [])
+                fluxo = coesao.get("fluxo_geral_especifico", "—")
+                log_fn(f"   {n_red} redundância(s) | fluxo geral→específico: {fluxo}")
             except Exception as e:
-                log_fn(f"   ⚠ Erro na busca de apoio: {e}", "warn")
-                apoio = {"_erro": str(e)}
+                log_fn(f"   ⚠ Erro na verificação de coesão: {e}", "warn")
+                coesao = {"_erro": str(e)}
         else:
-            log_fn("   ℹ Sem material de apoio — etapa pulada")
+            log_fn("   ℹ Capítulo único — verificação de coesão pulada")
 
         resultados_caps.append({
             "titulo": titulo_cap,
             "n_chars": len(conteudo),
             "analise": analise,
-            "apoio": apoio,
+            "coesao": coesao,
         })
 
     log_fn(f"✅ Análise concluída — {len(resultados_caps)} capítulo(s) processado(s)", "ok")
 
-    # ── Consolida lista de referências utilizadas ───────────────────────
-    referencias: dict[str, dict] = {}
-    for cap in resultados_caps:
-        for par in (cap.get("apoio") or {}).get("pares_encontrados") or []:
-            chave = par.get("autor_ano") or par.get("arquivo_fonte") or "—"
-            if chave not in referencias:
-                referencias[chave] = {
-                    "autor_ano": par.get("autor_ano") or "—",
-                    "arquivo_fonte": par.get("arquivo_fonte") or "—",
-                    "ocorrencias": 0,
-                }
-            referencias[chave]["ocorrencias"] += 1
-
     return {
         "metadados": metadados,
         "n_capitulos": len(capitulos),
-        "n_arquivos_apoio": n_mat,
         "capitulos": resultados_caps,
-        "referencias": sorted(referencias.values(), key=lambda r: r["autor_ano"]),
         "_capitulos_raw": capitulos,
     }
 
@@ -979,7 +956,7 @@ def gerar_relatorio_analise(resultado: dict, rel_dir: Path) -> None:
     n_aprovado    = sum(1 for p in pontuacoes if p == "APROVADO")
     n_ressalvas   = sum(1 for p in pontuacoes if p == "APROVADO_COM_RESSALVAS")
     n_revisao     = sum(1 for p in pontuacoes if p == "REQUER_REVISAO")
-    total_pares   = sum(len(c["apoio"].get("pares_encontrados") or []) for c in caps)
+    total_red     = sum(len(c.get("coesao", {}).get("redundancias") or []) for c in caps)
 
     # ── HTML ─────────────────────────────────────────────────────────────
     autor     = _esc(meta.get("autor") or "Não identificado")
@@ -1128,7 +1105,7 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
     <div class="stat s-verde"><strong>{n_aprovado}</strong><span>Aprovados</span></div>
     <div class="stat s-amarelo"><strong>{n_ressalvas}</strong><span>Com ressalvas</span></div>
     <div class="stat s-vermelho"><strong>{n_revisao}</strong><span>Requer revisão</span></div>
-    <div class="stat s-azul"><strong>{total_pares}</strong><span>Args. apoio</span></div>
+    <div class="stat s-azul"><strong>{total_red}</strong><span>Redundâncias</span></div>
     <div class="stat" style="background:#f8fafc;color:var(--cinza)"><strong>{len(caps)}</strong><span>Capítulos</span></div>
   </div>
 </div>
@@ -1142,7 +1119,7 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
     for i, cap in enumerate(caps):
         titulo_cap = _esc(cap.get("titulo", f"Capítulo {i+1}"))
         analise = cap.get("analise") or {}
-        apoio   = cap.get("apoio") or {}
+        coesao  = cap.get("coesao") or {}
 
         pont = analise.get("pontuacao_geral", "")
         cor_pont = _COR_PONT.get(pont, "#64748b")
@@ -1197,28 +1174,19 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
         # Recomendações
         recs = analise.get("recomendacoes_priorizadas") or []
 
-        # Argumentos de apoio
-        pares = apoio.get("pares_encontrados") or []
-        sintese_apoio = _esc(apoio.get("sintese") or "")
-        cobertura = _esc(apoio.get("cobertura") or "—")
+        # Coesão interna (redundâncias + fluxo geral→específico)
+        redundancias = coesao.get("redundancias") or []
+        sintese_coesao = _esc(coesao.get("sintese") or "")
+        fluxo = _esc(coesao.get("fluxo_geral_especifico") or "—")
+        obs_fluxo = _esc(coesao.get("observacoes_fluxo") or "")
+        encadeamento = _esc(coesao.get("encadeamento") or "—")
+        obs_encad = _esc(coesao.get("observacoes_encadeamento") or "")
 
-        pares_html = ""
-        for par in pares:
-            rel = str(par.get("relacao", "")).upper()
-            rel_cls = rel.lower()
-            rel_cor = _COR_REL.get(rel, "#64748b")
-            classif = str(par.get("classificacao", "")).upper()
-            classif_label, classif_cor = _CLASSIF_LABEL.get(classif, ("", "#64748b"))
-            autor_ano = _esc(par.get("autor_ano") or "")
-            classif_html = (
-                f'<span class="rel-tag" style="background:{classif_cor}22;color:{classif_cor};margin-left:6px">{_esc(classif_label)}</span>'
-                if classif_label else ""
-            )
-            pares_html += f"""<div class="par-item {rel_cls}">
-              <span class="rel-tag" style="background:{rel_cor}22;color:{rel_cor}">{_esc(rel)}</span>{classif_html}
-              <div class="argumento"><b>Dissertação:</b> {_esc(par.get("argumento_dissertacao",""))}</div>
-              <div class="trecho">{_esc(par.get("trecho_apoio",""))}</div>
-              <div class="fonte">📄 {_esc(par.get("arquivo_fonte",""))}{f" ({autor_ano})" if autor_ano else ""} — {_esc(par.get("explicacao",""))}</div>
+        red_html = ""
+        for red in redundancias:
+            red_html += f"""<div class="par-item">
+              <div class="argumento"><b>Trecho repetido:</b> {_esc(red.get("trecho_atual",""))}</div>
+              <div class="fonte">🔁 já presente em: {_esc(red.get("capitulo_relacionado",""))} — {_esc(red.get("sugestao",""))}</div>
             </div>"""
 
         n_chars_fmt = f"{cap.get('n_chars', 0):,}"
@@ -1278,28 +1246,19 @@ footer {{ text-align: center; font-size: .78rem; color: var(--cinza); margin-top
       <ul class="lista">{"".join(f"<li>{_esc(r)}</li>" for r in recs)}</ul>
     </div>''' if recs else ""}
 
+    <div class="bloco">
+      <div class="bloco-titulo">🔗 Coesão Interna: fluxo geral→específico ({fluxo}) | encadeamento ({encadeamento})</div>
+      {"<p style='font-size:.85rem'>" + obs_fluxo + "</p>" if obs_fluxo else ""}
+      {"<p style='font-size:.85rem'>" + obs_encad + "</p>" if obs_encad else ""}
+    </div>
+
     {f'''<div class="bloco">
-      <div class="bloco-titulo">🔍 Argumentos do Material de Apoio (cobertura: {cobertura})</div>
-      {pares_html}
-      {"<div class='sintese'>" + sintese_apoio + "</div>" if sintese_apoio else ""}
-    </div>''' if (pares_html or sintese_apoio) else ""}
+      <div class="bloco-titulo">🔁 Redundâncias com outros capítulos</div>
+      {red_html}
+      {"<div class='sintese'>" + sintese_coesao + "</div>" if sintese_coesao else ""}
+    </div>''' if (red_html or sintese_coesao) else ""}
 
   </div>
-</div>
-"""
-
-    # ── Referências utilizadas ───────────────────────────────────────────
-    referencias = resultado.get("referencias") or []
-    if referencias:
-        refs_html = "".join(
-            f"<li><b>{_esc(r['autor_ano'])}</b> — {_esc(r['arquivo_fonte'])} "
-            f"<span style='color:var(--cinza)'>({r['ocorrencias']}x citado)</span></li>"
-            for r in referencias
-        )
-        html += f"""
-<div class="card">
-  <h2>📚 Referências Utilizadas pelo Material de Apoio</h2>
-  <ul class="lista">{refs_html}</ul>
 </div>
 """
 
@@ -1331,7 +1290,7 @@ function toggleCap(header) {{
         f"Ano         : {meta.get('ano') or '—'}",
         "",
         f"RESUMO: {n_aprovado} aprovados | {n_ressalvas} com ressalvas | {n_revisao} requerem revisão",
-        f"Material de apoio: {resultado.get('n_arquivos_apoio', 0)} arquivo(s) | {total_pares} par(es) encontrado(s)",
+        f"Coesão interna: {total_red} redundância(s) entre capítulos identificada(s)",
         "",
     ]
     for cap in caps:
@@ -1354,16 +1313,16 @@ function toggleCap(header) {{
             L.append("Recomendações:")
             for r in recs:
                 L.append(f"  {r}")
-        pares = (cap.get("apoio") or {}).get("pares_encontrados") or []
-        if pares:
-            L.append(f"Argumentos de apoio encontrados: {len(pares)}")
-        L.append("")
-
-    referencias = resultado.get("referencias") or []
-    if referencias:
-        L += [sep, "  REFERÊNCIAS UTILIZADAS PELO MATERIAL DE APOIO", sep, ""]
-        for r in referencias:
-            L.append(f"  {r['autor_ano']} — {r['arquivo_fonte']} ({r['ocorrencias']}x citado)")
+        coesao = cap.get("coesao") or {}
+        redundancias = coesao.get("redundancias") or []
+        if redundancias:
+            L.append(f"Redundâncias com outros capítulos: {len(redundancias)}")
+            for r in redundancias:
+                L.append(f"  - repete trecho já presente em: {r.get('capitulo_relacionado','')} — {r.get('sugestao','')}")
+        if coesao.get("fluxo_geral_especifico"):
+            L.append(f"Fluxo geral→específico: {coesao.get('fluxo_geral_especifico')}")
+        if coesao.get("encadeamento"):
+            L.append(f"Encadeamento com capítulos vizinhos: {coesao.get('encadeamento')}")
         L.append("")
 
     (rel_dir / "relatorio_analise.txt").write_text("\n".join(L), encoding="utf-8")
@@ -1456,18 +1415,17 @@ PROBLEMAS IDENTIFICADOS NA ANÁLISE CRÍTICA (corrija-os):
 RECOMENDAÇÕES PRIORIZADAS:
 {recomendacoes}
 
-PROBLEMAS DE CONSONÂNCIA COM AS FONTES (corrija atribuições/citações incorretas):
+REDUNDÂNCIAS COM OUTROS CAPÍTULOS (remova ou resuma conforme indicado):
 {consonancia}
 
 INSTRUÇÕES PARA A REESCRITA:
 1. Mantenha a extensão e profundidade compatíveis com um TCC/dissertação — NÃO resuma demais, é para ser uma versão completa e revisada, não um resumo.
 2. Remova redundâncias: frases ou argumentos repetidos dentro do próprio capítulo.
-3. Remova ou sinalize argumentos que já aparecem em outros capítulos (conforme a visão geral acima) — referencie a seção correspondente em vez de repetir.
+3. Remova ou sinalize argumentos que já aparecem em outros capítulos (conforme a visão geral e a lista de redundâncias acima) — referencie a seção correspondente em vez de repetir.
 4. Reorganize a estrutura interna do capítulo do geral para o específico (contexto amplo → discussão específica → conclusão do capítulo).
-5. Corrija as distorções de consonância apontadas, ajustando a atribuição/citação para refletir corretamente a fonte.
-6. Corrija os problemas estruturais e ABNT identificados.
-7. Preserve citações ABNT válidas (autor, ano) e dados/resultados empíricos.
-8. Escreva em português formal acadêmico, terceira pessoa/impessoal.
+5. Corrija os problemas estruturais e ABNT identificados.
+6. Preserve citações ABNT válidas (autor, ano) e dados/resultados empíricos.
+7. Escreva em português formal acadêmico, terceira pessoa/impessoal.
 
 Retorne SOMENTE o texto revisado do capítulo (sem comentários, sem markdown, sem JSON — apenas o texto corrido do capítulo, incluindo o título)."""
 
@@ -1477,7 +1435,7 @@ def reescrever_capitulo(
     texto_cap: str,
     mapa_geral: str,
     analise: dict,
-    apoio: dict,
+    coesao: dict,
     api_key: str,
 ) -> str:
     client = anthropic.Anthropic(api_key=api_key)
@@ -1490,19 +1448,15 @@ def reescrever_capitulo(
     recs = analise.get("recomendacoes_priorizadas") or []
     recs_str = "\n".join(f"- {r}" for r in recs) or "Nenhuma recomendação adicional."
 
-    pares_problema = [
-        p for p in (apoio.get("pares_encontrados") or [])
-        if str(p.get("classificacao", "")).upper() in
-        ("DISTORCAO_PARCIAL", "DISTORCAO_GRAVE", "IMPRECISAO_ATRIBUICAO")
-    ]
-    if pares_problema:
+    redundancias = coesao.get("redundancias") or []
+    if redundancias:
         consonancia_str = "\n".join(
-            f"- Trecho: \"{p.get('argumento_dissertacao','')}\" → "
-            f"Problema: {p.get('classificacao','')} — {p.get('explicacao','')}"
-            for p in pares_problema
+            f"- Trecho: \"{r.get('trecho_atual','')}\" → "
+            f"já presente em: {r.get('capitulo_relacionado','')} — {r.get('sugestao','')}"
+            for r in redundancias
         )
     else:
-        consonancia_str = "Nenhum problema de consonância identificado para este capítulo."
+        consonancia_str = "Nenhuma redundância identificada para este capítulo."
 
     prompt = _PROMPT_REESCRITA.format(
         mapa_geral=mapa_geral or "(documento de capítulo único)",
@@ -1690,10 +1644,10 @@ def gerar_dissertacao_revisada(
     for i, (titulo_cap, conteudo) in enumerate(capitulos):
         log_fn(f"   [{i+1}/{n}] Reescrevendo: «{titulo_cap[:50]}»…")
         analise = (resultados_caps[i] or {}).get("analise") or {}
-        apoio = (resultados_caps[i] or {}).get("apoio") or {}
+        coesao = (resultados_caps[i] or {}).get("coesao") or {}
         mapa_contexto = _mapa_para_contexto(mapa, excluir_idx=i)
         try:
-            texto_revisado = reescrever_capitulo(titulo_cap, conteudo, mapa_contexto, analise, apoio, api_key)
+            texto_revisado = reescrever_capitulo(titulo_cap, conteudo, mapa_contexto, analise, coesao, api_key)
         except Exception as e:
             log_fn(f"   ⚠ Erro ao reescrever capítulo, mantendo original: {e}", "warn")
             texto_revisado = f"{titulo_cap}\n\n{conteudo}"

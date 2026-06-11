@@ -505,13 +505,9 @@ def _rodar_analise_dissertacao(
 
         from analisador import (
             analisar_dissertacao,
-            extrair_material_de_zip,
-            carregar_material_de_pasta,
             gerar_relatorio_analise,
             baixar_google_drive,
-            baixar_google_drive_bytes,
             gerar_dissertacao_revisada,
-            _ler_bytes as _ler_bytes_apoio,
         )
 
         # Baixa dissertação do Drive se necessário
@@ -529,49 +525,8 @@ def _rodar_analise_dissertacao(
                 log(f"   ✗ Erro ao baixar dissertação do Drive: {e}", "erro")
                 raise
 
-        # Carrega material de apoio
-        material: dict[str, str] = {}
-        destino = Path(tmpdir) / "material_extraido"
-
-        # Prioridade: material localizado (importado da aba 3) > arquivo enviado > URL do Drive
-        loc_job = _jobs.get(loc_job_id) if loc_job_id else None
-        if loc_job and loc_job.get("status") == "concluido":
-            relevantes = loc_job.get("arquivos_relevantes") or []
-            material_texto = loc_job.get("material_texto") or {}
-            material = {nome: material_texto[nome] for nome in relevantes if nome in material_texto}
-            log(f"📥 Usando {len(material)} arquivo(s) importado(s) da Localização de Referências", "etapa")
-
-        elif material_path:
-            mat = Path(material_path)
-            if mat.suffix.lower() == ".zip":
-                log("📦 Lendo arquivos do ZIP em memória…", "etapa")
-                material = extrair_material_de_zip(mat)
-            else:
-                from verificador import ler_arquivo
-                texto = ler_arquivo(mat)
-                if texto and len(texto) > 100:
-                    material = {mat.name: texto}
-            log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
-
-        elif drive_url:
-            log("☁️ Baixando material de apoio do Google Drive…", "etapa")
-            try:
-                drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url, log_fn=log)
-                if drive_ext.lower() == ".zip":
-                    log("📦 Lendo arquivos do ZIP em memória…", "etapa")
-                    material = extrair_material_de_zip(drive_bytes)
-                else:
-                    texto = _ler_bytes_apoio(drive_bytes, drive_ext)
-                    if texto and len(texto) > 100:
-                        material = {f"arquivo_drive{drive_ext}": texto}
-                log(f"   {len(material)} arquivo(s) de apoio carregado(s)")
-            except Exception as e:
-                log(f"   ⚠ Erro ao baixar do Drive: {e}", "warn")
-                log("   Continuando sem material de apoio…", "warn")
-
         resultado = analisar_dissertacao(
             diss_path=str(diss_final),
-            material=material,
             api_key=api_key,
             log_fn=log,
         )
@@ -611,7 +566,6 @@ def _rodar_analise_dissertacao(
                 "aprovados":     sum(1 for p in ponts if p == "APROVADO"),
                 "ressalvas":     sum(1 for p in ponts if p == "APROVADO_COM_RESSALVAS"),
                 "revisao":       sum(1 for p in ponts if p == "REQUER_REVISAO"),
-                "n_apoio":       resultado.get("n_arquivos_apoio", 0),
                 "autor":         (resultado.get("metadados") or {}).get("autor") or "—",
                 "titulo":        (resultado.get("metadados") or {}).get("titulo") or "—",
                 "docx_disponivel": docx_path is not None,
