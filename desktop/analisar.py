@@ -793,14 +793,19 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
                         score += hits_cap * 2
                         score += hits_livro * 2
                 else:
-                    # Obra simples: autor+ano no texto (forte evidência combinada)
-                    if sob_no_texto and ano_no_texto:
-                        score += 12 + hits_cap * 2
-                    elif hits_cap >= 4:
-                        # Muitas palavras do título no texto (sem nome no arquivo)
-                        if sob_no_texto: score += 8
-                        if ano_no_texto: score += 3
+                    # Obra simples sem match no filename: o título é quem
+                    # individualiza a obra. Sobrenome+ano sozinhos não bastam,
+                    # pois qualquer artigo que cite o autor na bibliografia
+                    # terá ambos no texto. Exige um mínimo de palavras do
+                    # título presentes no conteúdo.
+                    if hits_cap >= 3:
                         score += hits_cap * 2
+                        if sob_no_texto: score += 5
+                        if ano_no_texto: score += 3
+                    elif hits_cap >= 2 and sob_no_texto and ano_no_texto:
+                        # Evidência fraca de título, mas reforçada por
+                        # autor+ano combinados no texto
+                        score += hits_cap * 2 + 4
 
         if score > 0:
             candidatos.append((score, nome, texto))
