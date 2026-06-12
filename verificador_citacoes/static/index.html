@@ -399,8 +399,8 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     <p>ABNT · IA · Análise crítica · Verificação de citações</p>
   </div>
   <div class="mode-tabs">
-    <button class="mode-tab ativo" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
-    <button class="mode-tab" onclick="mudarModo('localizador')">🔗 Localizar Referências</button>
+    <button class="mode-tab ativo" onclick="mudarModo('localizador')">🔗 Localizar Referências</button>
+    <button class="mode-tab" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
     <button class="mode-tab" onclick="mudarModo('verificador')">🔍 Verificador de Citações</button>
   </div>
 </header>
@@ -584,7 +584,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- MODO: ANALISADOR DE DISSERTAÇÃO (novo)                          -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<div class="modo ativo" id="modo-analisador">
+<div class="modo" id="modo-analisador">
 
   <!-- Steps do analisador -->
   <div class="steps">
@@ -733,7 +733,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- MODO: LOCALIZADOR DE REFERÊNCIAS (novo)                          -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<div class="modo" id="modo-localizador">
+<div class="modo ativo" id="modo-localizador">
   <div class="card">
     <h2>🔗 Localizar Referências no Material de Apoio</h2>
     <p style="color:var(--cinza);line-height:1.6">
@@ -1081,7 +1081,7 @@ function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
   document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('ativo'));
   document.getElementById('modo-' + modo).classList.add('ativo');
-  const idx = { analisador: 0, localizador: 1, verificador: 2 }[modo] || 0;
+  const idx = { localizador: 0, analisador: 1, verificador: 2 }[modo] || 0;
   document.querySelectorAll('.mode-tab')[idx].classList.add('ativo');
 }
 
