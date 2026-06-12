@@ -1418,14 +1418,16 @@ RECOMENDAÇÕES PRIORIZADAS:
 REDUNDÂNCIAS COM OUTROS CAPÍTULOS (remova ou resuma conforme indicado):
 {consonancia}
 
+REGRA FUNDAMENTAL (obrigatória): NADA PODE SER CRIADO. Você só pode REORGANIZAR, CONCATENAR e RESUMIR/ELIMINAR REDUNDÂNCIAS do conteúdo que já existe no texto original acima. Não introduza fatos, exemplos, dados, citações, autores ou conclusões que não estejam no texto original.
+
 INSTRUÇÕES PARA A REESCRITA:
-1. Mantenha a extensão e profundidade compatíveis com um TCC/dissertação — NÃO resuma demais, é para ser uma versão completa e revisada, não um resumo.
-2. Remova redundâncias: frases ou argumentos repetidos dentro do próprio capítulo.
-3. Remova ou sinalize argumentos que já aparecem em outros capítulos (conforme a visão geral e a lista de redundâncias acima) — referencie a seção correspondente em vez de repetir.
-4. Reorganize a estrutura interna do capítulo do geral para o específico (contexto amplo → discussão específica → conclusão do capítulo).
-5. Corrija os problemas estruturais e ABNT identificados.
-6. Preserve citações ABNT válidas (autor, ano) e dados/resultados empíricos.
-7. Escreva em português formal acadêmico, terceira pessoa/impessoal.
+1. Mantenha a extensão e profundidade compatíveis com um TCC/dissertação — NÃO resuma demais, é para ser uma versão completa e revisada, não um resumo. A reescrita deve usar exclusivamente frases, ideias e dados já presentes no texto original, apenas reorganizados, concatenados ou condensados.
+2. Reorganize os PARÁGRAFOS do capítulo do geral para o específico: agrupe primeiro o contexto amplo/conceitos gerais, depois a discussão específica, depois a conclusão do capítulo — movendo parágrafos existentes para a posição lógica correta, sem criar novos.
+3. Elimine redundâncias: quando a mesma ideia/argumento aparecer em mais de um parágrafo dentro do capítulo, mantenha-a apenas no parágrafo mais apropriado (o mais geral, se for um conceito de base, ou o mais específico, se for uma conclusão) e remova as repetições.
+4. Remova ou sinalize argumentos que já aparecem em outros capítulos (conforme a visão geral e a lista de redundâncias acima) — referencie a seção correspondente em vez de repetir, mantendo o conteúdo apenas no local mais apropriado do documento como um todo.
+5. Corrija os problemas estruturais e ABNT identificados, sem alterar o sentido ou adicionar conteúdo novo.
+6. Preserve citações ABNT válidas (autor, ano) e dados/resultados empíricos exatamente como aparecem no original.
+7. Escreva em português formal acadêmico, terceira pessoa/impessoal — ajustando apenas conectores/transições entre parágrafos reorganizados, sem inserir novas afirmações.
 
 Retorne SOMENTE o texto revisado do capítulo (sem comentários, sem markdown, sem JSON — apenas o texto corrido do capítulo, incluindo o título)."""
 
@@ -1493,10 +1495,12 @@ INÍCIO DO PRÓXIMO CAPÍTULO («{titulo_prox}»):
 {inicio_prox}
 \"\"\"
 
+REGRA FUNDAMENTAL (obrigatória): NADA PODE SER CRIADO. Use apenas o que já está no texto do capítulo atual — apenas reorganize, condense ou remova trechos redundantes.
+
 Revise APENAS o capítulo atual para:
 1. Garantir transição fluida com o capítulo anterior e o próximo (sem repetir literalmente o que já foi dito).
 2. Remover qualquer frase ou parágrafo redundante que se repita quase identicamente em relação aos trechos mostrados acima.
-3. Manter todo o restante do conteúdo e extensão.
+3. Manter todo o restante do conteúdo e extensão, sem adicionar fatos, exemplos ou afirmações novas.
 
 Retorne SOMENTE o texto revisado do capítulo atual (sem comentários, sem markdown)."""
 
