@@ -523,11 +523,13 @@ def localizar_referencias(
                 if autor_low in Path(nome_arq).stem.lower():
                     score += 50
 
-                # Sinal forte: autor e ano aparecem próximos um do outro
-                # (capa/cabeçalho do arquivo, ou citação da própria obra)
+                # Sinal forte: autor e ano aparecem bem próximos (como em
+                # uma citação real "(ANDRADE, 2018)"), não apenas no mesmo
+                # parágrafo — janela pequena evita falsos positivos em
+                # catálogos/bibliografias de editoras com muitos autores e anos.
                 if ano:
                     for m in re.finditer(re.escape(autor_low), texto_low):
-                        janela = texto_low[max(0, m.start() - 150): m.end() + 150]
+                        janela = texto_low[max(0, m.start() - 40): m.end() + 40]
                         if ano in janela:
                             score += 10
 
@@ -535,7 +537,7 @@ def localizar_referencias(
                 # não deixar sobrenomes comuns dominarem o ranking)
                 score += min(n_autor, 5)
 
-                if score >= 10:
+                if score >= 15:
                     candidatos.append((score, nome_arq))
 
         candidatos.sort(key=lambda x: x[0], reverse=True)
@@ -554,10 +556,14 @@ def localizar_referencias(
 
         # Caso ambíguo (mais de um candidato competitivo) e temos chave de
         # API: pede para a IA (modelo barato) escolher o arquivo correto.
-        if api_key.strip() and len(arquivos) > 1:
-            escolhido = _desambiguar_com_ia(ref, arquivos, material, api_key)
-            if escolhido:
-                arquivos = [escolhido]
+        if len(arquivos) > 1:
+            if api_key.strip():
+                escolhido = _desambiguar_com_ia(ref, arquivos, material, api_key)
+                arquivos = [escolhido] if escolhido else arquivos[:1]
+            else:
+                # Sem IA, mantém apenas o candidato com maior pontuação —
+                # uma única obra por referência.
+                arquivos = arquivos[:1]
 
         # Nenhum sinal forte de nome de arquivo/proximidade autor+ano: o
         # autor e/ou título da obra podem aparecer no CONTEÚDO do arquivo
@@ -578,14 +584,21 @@ def localizar_referencias(
                 if ano and ano in material[nome_arq]:
                     pontos += 1
                 pontos += sum(1 for p in titulo_palavras if p in texto_low[:3000])
-                if pontos > 0:
+                # Exige sinal mínimo combinando autor citado E palavras do
+                # título no início do arquivo — evita candidatos baseados
+                # apenas em coincidência de ano ou termos genéricos.
+                tem_autor = autor and texto_low.count(autor.lower()) > 0
+                tem_titulo = sum(1 for p in titulo_palavras if p in texto_low[:3000]) >= 2
+                if pontos > 0 and tem_autor and tem_titulo:
                     fracos.append((pontos, nome_arq))
             fracos.sort(key=lambda x: -x[0])
-            candidatos_fracos = [nome for _, nome in fracos[:6]]
+            candidatos_fracos = [nome for _, nome in fracos[:3]]
             if candidatos_fracos:
-                escolhido = _desambiguar_com_ia(ref, candidatos_fracos, material, api_key)
-                if escolhido:
-                    arquivos = [escolhido]
+                if api_key.strip():
+                    escolhido = _desambiguar_com_ia(ref, candidatos_fracos, material, api_key)
+                    arquivos = [escolhido] if escolhido else candidatos_fracos[:1]
+                else:
+                    arquivos = candidatos_fracos[:1]
 
         resultados.append({
             "referencia": ref,
