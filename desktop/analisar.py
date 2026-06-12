@@ -755,11 +755,34 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
     palavras_cap, palavras_livro = _extrair_palavras_titulo(ref_texto)
     eh_compendio = bool(palavras_livro)
 
+    # ── Document-frequency das palavras do título entre os candidatos ──
+    # Palavras genéricas do domínio (ex.: "intelligence", "policing") tendem
+    # a aparecer em quase todos os arquivos de apoio. Para evitar que esses
+    # "hits" frágeis sustentem um match somente-por-conteúdo, calculamos a
+    # fração de arquivos que contém cada palavra e descontamos as muito
+    # frequentes (estilo IDF simplificado).
+    todas_palavras = set(palavras_cap) | set(palavras_livro)
+    n_arquivos = max(len(material), 1)
+    df = {}
+    for p in todas_palavras:
+        cnt = 0
+        for texto in material.values():
+            if texto and p in texto.lower():
+                cnt += 1
+        df[p] = cnt / n_arquivos
+
+    def _palavra_distintiva(p: str) -> bool:
+        # Considera "distintiva" se aparece em menos de 60% dos arquivos
+        return df.get(p, 0.0) < 0.6
+
+    TAMANHO_CABECALHO = 2000  # janela do "início do documento" / título-página
+
     candidatos = []
     for nome, texto in material.items():
         score = 0
         nome_l = nome.lower()
         tl = texto.lower() if texto else ""
+        tl_inicio = tl[:TAMANHO_CABECALHO]
 
         # ── Matching por nome de arquivo ──────────────────────────────
         nome_no_arquivo = sob_l in nome_l
@@ -777,6 +800,17 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
             # Palavras do título do livro (compêndio)
             hits_livro = sum(1 for p in palavras_livro if p in tl)
 
+            # Hits "distintivos" (descontando palavras genéricas de alta
+            # frequência no corpus de apoio) e hits no cabeçalho/início do
+            # documento (proxy de que o arquivo É a própria obra, não apenas
+            # cita-a em uma bibliografia)
+            hits_cap_dist = sum(1 for p in palavras_cap
+                                 if p in tl and _palavra_distintiva(p))
+            hits_livro_dist = sum(1 for p in palavras_livro
+                                   if p in tl and _palavra_distintiva(p))
+            hits_cap_inicio = sum(1 for p in palavras_cap if p in tl_inicio)
+            hits_livro_inicio = sum(1 for p in palavras_livro if p in tl_inicio)
+
             if nome_no_arquivo:
                 # Filename já bate: conteúdo é bônus de confirmação
                 if sob_no_texto: score += 5
@@ -786,8 +820,12 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
             else:
                 # Sem match no filename: exige evidência mais forte no conteúdo
                 if eh_compendio:
-                    # Compêndio: aceita se o livro OU o autor do capítulo está no texto
-                    if hits_livro >= 3 or (sob_no_texto and hits_cap >= 2):
+                    # Compêndio: aceita se o livro (com palavras distintivas
+                    # e perto do início do doc) OU o autor+título do capítulo
+                    # está no texto
+                    aceita_livro = (hits_livro_dist >= 3 and hits_livro_inicio >= 2)
+                    aceita_cap   = (sob_no_texto and hits_cap_dist >= 2 and hits_cap_inicio >= 1)
+                    if aceita_livro or aceita_cap:
                         if sob_no_texto: score += 8
                         if ano_no_texto: score += 3
                         score += hits_cap * 2
@@ -796,15 +834,19 @@ def _buscar_fonte(sobrenome: str, ano: str, ref_texto: str,
                     # Obra simples sem match no filename: o título é quem
                     # individualiza a obra. Sobrenome+ano sozinhos não bastam,
                     # pois qualquer artigo que cite o autor na bibliografia
-                    # terá ambos no texto. Exige um mínimo de palavras do
-                    # título presentes no conteúdo.
-                    if hits_cap >= 3:
+                    # terá ambos no texto. Exige palavras DISTINTIVAS do
+                    # título (não genéricas do domínio) e que apareçam perto
+                    # do início do documento — indício de que o arquivo É a
+                    # própria obra (título/capa), não apenas a cita em sua
+                    # bibliografia.
+                    if hits_cap_dist >= 3 and hits_cap_inicio >= 2:
                         score += hits_cap * 2
                         if sob_no_texto: score += 5
                         if ano_no_texto: score += 3
-                    elif hits_cap >= 2 and sob_no_texto and ano_no_texto:
+                    elif (hits_cap_dist >= 2 and hits_cap_inicio >= 2
+                          and sob_no_texto and ano_no_texto):
                         # Evidência fraca de título, mas reforçada por
-                        # autor+ano combinados no texto
+                        # autor+ano combinados no texto e presença no início
                         score += hits_cap * 2 + 4
 
         if score > 0:
