@@ -52,7 +52,10 @@ _jobs: dict[str, dict] = {}   # job_id → {queue, tmpdir, status, relatorio_dir
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html_path = _BASE / "static" / "index.html"
-    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        html_path.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 @app.get("/ping")
