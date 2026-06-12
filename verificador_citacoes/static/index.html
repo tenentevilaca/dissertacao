@@ -447,6 +447,13 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
       </div>
       <div id="badge-diss"></div>
 
+      <p style="margin:14px 0 6px;color:var(--cinza);font-size:.83rem;">
+        Ou cole um link público do Google Drive (.docx):
+      </p>
+      <input type="text" id="diss-drive-url" placeholder="https://drive.google.com/file/d/…/view?usp=sharing"
+        style="width:100%;padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:.9rem"
+        oninput="verifValidarDissDriveUrl()">
+
       <div class="btn-row">
         <button class="btn btn-primary" onclick="irPara(2)" id="btn-prox-1" disabled>
           Próximo →
@@ -471,13 +478,20 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 
       <div id="painel-ref-normal">
       <div class="dropzone" id="drop-ref">
-        <input type="file" id="file-ref" multiple accept=".pdf,.docx,.doc,.txt"
+        <input type="file" id="file-ref" multiple accept=".pdf,.docx,.doc,.txt,.zip"
                onchange="selecionarRefs(this)">
         <div class="icon">📚</div>
         <strong>Clique ou arraste os arquivos aqui</strong>
-        <p>Formatos: <code>.pdf</code> · <code>.docx</code> · <code>.txt</code> · múltiplos arquivos</p>
+        <p>Formatos: <code>.pdf</code> · <code>.docx</code> · <code>.txt</code> · <code>.zip</code> (pasta zipada) · múltiplos arquivos</p>
       </div>
       <div id="badges-ref"></div>
+
+      <p style="margin:14px 0 6px;color:var(--cinza);font-size:.83rem;">
+        Ou cole um link público do Google Drive (arquivo único ou .zip):
+      </p>
+      <input type="text" id="ref-drive-url" placeholder="https://drive.google.com/file/d/…/view?usp=sharing"
+        style="width:100%;padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;font-size:.9rem"
+        oninput="verifValidarRefDriveUrl()">
       </div><!-- /painel-ref-normal -->
 
       <div class="btn-row">
@@ -826,6 +840,10 @@ function removerDiss() {
   document.getElementById('file-diss').value = '';
   document.getElementById('btn-prox-1').disabled = true;
 }
+function verifValidarDissDriveUrl() {
+  const url = document.getElementById('diss-drive-url').value.trim();
+  document.getElementById('btn-prox-1').disabled = !(estado.fileDiss || url);
+}
 
 // ── Passo 2: Referências ─────────────────────────────────────────────────
 function selecionarRefs(input) {
@@ -844,7 +862,14 @@ function renderBadgesRef() {
   cont.innerHTML = estado.fileRefs.map(f =>
     `<span class="file-badge">📎 ${f.name} <button onclick="removerRef('${f.name.replace(/'/g,"\\'")}')">×</button></span>`
   ).join('');
-  document.getElementById('btn-prox-2').disabled = estado.fileRefs.length === 0;
+  const url = document.getElementById('ref-drive-url').value.trim();
+  document.getElementById('btn-prox-2').disabled = estado.fileRefs.length === 0 && !url;
+}
+function verifValidarRefDriveUrl() {
+  const url = document.getElementById('ref-drive-url').value.trim();
+  if (!estado.materialLocalizadoJobId) {
+    document.getElementById('btn-prox-2').disabled = estado.fileRefs.length === 0 && !url;
+  }
 }
 
 // ── Passo 3: Configuração ────────────────────────────────────────────────
@@ -904,11 +929,17 @@ async function iniciarAnalise() {
   lbl.textContent = 'Enviando arquivos…';
 
   const form = new FormData();
-  form.append('dissertacao', estado.fileDiss, estado.fileDiss.name);
+  if (estado.fileDiss) {
+    form.append('dissertacao', estado.fileDiss, estado.fileDiss.name);
+  } else {
+    form.append('dissertacao_drive_url', document.getElementById('diss-drive-url').value.trim());
+  }
   if (estado.materialLocalizadoJobId) {
     form.append('material_localizado_job_id', estado.materialLocalizadoJobId);
   } else {
     estado.fileRefs.forEach(f => form.append('referencias', f, f.name));
+    const refDriveUrl = document.getElementById('ref-drive-url').value.trim();
+    if (refDriveUrl) form.append('referencias_drive_url', refDriveUrl);
   }
   form.append('api_key', document.getElementById('apikey').value.trim());
   form.append('sem_verificacao', document.getElementById('toggle-sem-ia').checked);

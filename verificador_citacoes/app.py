@@ -373,12 +373,16 @@ def _rodar_localizar_referencias(
 
 @app.post("/iniciar")
 async def iniciar_analise(
-    dissertacao: UploadFile = File(...),
+    dissertacao: Optional[UploadFile] = File(None),
+    dissertacao_drive_url: str = Form(""),
     referencias: list[UploadFile] = File(default=[]),
+    referencias_drive_url: str = Form(""),
     api_key: str = Form(""),
     sem_verificacao: str = Form("false"),
     material_localizado_job_id: str = Form(""),
 ):
+    from analisador import extrair_material_de_zip_com_bytes, baixar_google_drive_bytes
+
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
     queue: asyncio.Queue = asyncio.Queue()
@@ -390,16 +394,35 @@ async def iniciar_analise(
         "relatorio_dir": None,
     }
 
-    # Salva arquivos enviados
-    diss_path = Path(tmpdir) / dissertacao.filename
-    diss_path.write_bytes(await dissertacao.read())
+    # Salva a dissertação (arquivo ou link do Google Drive)
+    if dissertacao and dissertacao.filename:
+        diss_path = Path(tmpdir) / dissertacao.filename
+        diss_path.write_bytes(await dissertacao.read())
+    elif dissertacao_drive_url.strip():
+        diss_bytes, diss_ext = baixar_google_drive_bytes(dissertacao_drive_url.strip())
+        diss_path = Path(tmpdir) / f"dissertacao{diss_ext}"
+        diss_path.write_bytes(diss_bytes)
+    else:
+        raise HTTPException(400, "Envie a dissertação como arquivo ou link do Google Drive")
 
     refs_dir = Path(tmpdir) / "referencias"
     refs_dir.mkdir()
+
+    def _salvar_referencia(nome: str, dados: bytes):
+        suffix = Path(nome).suffix.lower()
+        if suffix == ".zip":
+            for sub_nome, (_texto, sub_dados) in extrair_material_de_zip_com_bytes(dados).items():
+                (refs_dir / sub_nome).write_bytes(sub_dados)
+        else:
+            (refs_dir / nome).write_bytes(dados)
+
     for arq in referencias:
         if arq and arq.filename:
-            dest = refs_dir / arq.filename
-            dest.write_bytes(await arq.read())
+            _salvar_referencia(arq.filename, await arq.read())
+
+    if referencias_drive_url.strip():
+        drive_bytes, drive_ext = baixar_google_drive_bytes(referencias_drive_url.strip())
+        _salvar_referencia(f"referencias_drive{drive_ext}", drive_bytes)
 
     # Converte sem_verificacao (vem como string do FormData JS)
     sem_verif_bool = str(sem_verificacao).lower() in ("true", "1", "yes")
