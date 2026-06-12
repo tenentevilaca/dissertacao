@@ -295,7 +295,11 @@ def extrair_referencias(texto: str, idx_refs: int) -> list[Referencia]:
     buffer: list[str] = []
 
     _RE_NOVA = re.compile(
-        r"^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
+        r"^(?:"
+        r"[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\'\-]+[,;]"
+        r"|[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-]*"
+        r"(?:\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-]*)+\.\s"
+        r")"
     )
 
     # Extrai sobrenomes de todos os autores de uma entrada de referência
@@ -317,7 +321,7 @@ def extrair_referencias(texto: str, idx_refs: int) -> list[Referencia]:
             if len(sob) > 1:
                 resultado.append(sob)
         if not resultado:
-            m_sob = re.match(r"^([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-Za-záéíóúâêîôûãõàç\-\']+)", t)
+            m_sob = re.match(r"^([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇa-záéíóúâêîôûãõàç\-\']+)", t)
             if m_sob:
                 resultado = [m_sob.group(1).upper()]
         return resultado or ["DESCONHECIDO"]
@@ -694,11 +698,29 @@ def analisar(
 
     # Índice por TODOS os co-autores → mesma referência
     idx_refs_dict: dict[str, Referencia] = {}
+    _RE_SIGLA = re.compile(r"\(([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{2,8})\)")
+    _PREP_SIGLA = {"DE", "DA", "DO", "DAS", "DOS", "E", "EM", "PARA", "A", "O"}
     for r in referencias:
         for sob in r.sobrenomes:
             chave = f"{sob}_{r.ano}"
             if chave not in idx_refs_dict:  # primeiro autor tem prioridade
                 idx_refs_dict[chave] = r
+        # Alias por sigla entre parênteses no texto da referência (ex.: "...(OSCE).")
+        for sigla in _RE_SIGLA.findall(r.texto):
+            chave_sigla = f"{sigla}_{r.ano}"
+            if chave_sigla not in idx_refs_dict:
+                idx_refs_dict[chave_sigla] = r
+        # Alias por sigla formada a partir das iniciais do(s) nome(s)
+        # institucional(is) (ex.: "FÓRUM BRASILEIRO DE SEGURANÇA PÚBLICA" -> "FBSP")
+        cabecalho = re.split(r"\.\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]", r.texto)[0]
+        palavras = [p.strip(",.") for p in cabecalho.split()]
+        palavras_sigla = [p for p in palavras if p.upper() not in _PREP_SIGLA and p[:1].isalpha()]
+        if len(palavras_sigla) >= 2:
+            sigla_gerada = "".join(p[0].upper() for p in palavras_sigla)
+            if 2 <= len(sigla_gerada) <= 8:
+                chave_sigla = f"{sigla_gerada}_{r.ano}"
+                if chave_sigla not in idx_refs_dict:
+                    idx_refs_dict[chave_sigla] = r
 
     chaves_primarias: set[str] = set()   # chave do primeiro autor de cada ref citada
     citadas_sem_ref: list[Citacao] = []
