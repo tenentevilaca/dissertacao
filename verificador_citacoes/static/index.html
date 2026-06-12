@@ -395,9 +395,9 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     <p>ABNT · IA · Análise crítica · Verificação de citações</p>
   </div>
   <div class="mode-tabs">
-    <button class="mode-tab ativo" onclick="mudarModo('verificador')">🔍 Verificador de Citações</button>
-    <button class="mode-tab" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
+    <button class="mode-tab ativo" onclick="mudarModo('analisador')">📋 Analisador de Dissertação</button>
     <button class="mode-tab" onclick="mudarModo('localizador')">🔗 Localizar Referências</button>
+    <button class="mode-tab" onclick="mudarModo('verificador')">🔍 Verificador de Citações</button>
   </div>
 </header>
 
@@ -406,7 +406,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- MODO: VERIFICADOR DE CITAÇÕES (existente)                       -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<div class="modo ativo" id="modo-verificador">
+<div class="modo" id="modo-verificador">
 
   <!-- Steps -->
   <div class="steps">
@@ -580,7 +580,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 <!-- ════════════════════════════════════════════════════════════════ -->
 <!-- MODO: ANALISADOR DE DISSERTAÇÃO (novo)                          -->
 <!-- ════════════════════════════════════════════════════════════════ -->
-<div class="modo" id="modo-analisador">
+<div class="modo ativo" id="modo-analisador">
 
   <!-- Steps do analisador -->
   <div class="steps">
@@ -1077,7 +1077,7 @@ function mudarModo(modo) {
   document.querySelectorAll('.modo').forEach(m => m.classList.remove('ativo'));
   document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('ativo'));
   document.getElementById('modo-' + modo).classList.add('ativo');
-  const idx = { verificador: 0, analisador: 1, localizador: 2 }[modo] || 0;
+  const idx = { analisador: 0, localizador: 1, verificador: 2 }[modo] || 0;
   document.querySelectorAll('.mode-tab')[idx].classList.add('ativo');
 }
 
