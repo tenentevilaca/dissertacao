@@ -436,36 +436,118 @@ def verificar_com_claude(
     except Exception as e:
         return {"veredicto": "ERRO", "justificativa": str(e)[:200], "trecho_fonte": ""}
 
+def _extrair_palavras_titulo(titulo: str) -> tuple:
+    """
+    Extrai palavras-chave do título de uma referência.
+    Retorna (palavras_do_artigo/capitulo, palavras_do_livro).
+    Detecta compêndios pelo padrão ABNT: "... In: EDITOR (org.)..."
+    """
+    palavras_artigo = []
+    palavras_livro  = []
+
+    m_in = re.search(r"\bIn:\s*", titulo, re.IGNORECASE)
+    if m_in:
+        texto_cap  = titulo[:m_in.start()]
+        texto_livro = titulo[m_in.end():]
+        palavras_artigo = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                  texto_cap) if p.lower() not in _STOPWORDS_PT][:12]
+        palavras_livro  = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                  texto_livro) if p.lower() not in _STOPWORDS_PT][:12]
+    else:
+        palavras_artigo = [p for p in re.findall(r"[a-záéíóúâêîôûãõàçA-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ]{5,}",
+                                                   titulo) if p.lower() not in _STOPWORDS_PT][:15]
+
+    return (
+        [p.lower() for p in palavras_artigo],
+        [p.lower() for p in palavras_livro],
+    )
+
 
 def _buscar_fonte(sobrenome: str, ano: str, titulo: str, material: dict[str, str]) -> tuple[str, str]:
     """
-    Tenta encontrar o arquivo de apoio correspondente à referência.
-    Estratégia: nome do arquivo → (sobrenome + ano no texto) → (sobrenome no texto).
+    Encontra o arquivo de apoio para uma referência bibliográfica.
+
+    Lógica de scoring (maior = melhor):
+    - Sobrenome no nome do arquivo      -> +20
+    - Ano no nome do arquivo            -> +10
+    - Palavras do título no conteúdo    -> +2 por palavra (cap) / +1 por palavra (livro)
+    - Sobrenome no conteúdo             -> +5 (se já no filename) / +3 (só conteúdo)
+    - Ano no conteúdo                   -> +3 (se já no filename) / +1 (só conteúdo)
+
+    Para compêndios (detectados por "In:"), busca separadamente pelo
+    título do capítulo E pelo título do livro, e aceita o arquivo que
+    contenha o autor do capítulo OU o título do livro.
     """
-    sob_lower = sobrenome.lower()
-    titulo_palavras = [p for p in re.findall(r'[a-záéíóúâêîôûãõàç]{4,}', titulo.lower())
-                       if p not in _STOPWORDS_PT][:5]
+    sob_l = sobrenome.lower()
+    palavras_cap, palavras_livro = _extrair_palavras_titulo(titulo)
+    eh_compendio = bool(palavras_livro)
 
-    candidatos: list[tuple[int, str, str]] = []  # (score, nome, texto)
+    # Document-frequency das palavras do título entre os candidatos.
+    # Descontamos palavras genéricas do domínio (alta frequência nos
+    # arquivos de apoio) para evitar matches somente-por-conteúdo frágeis.
+    todas_palavras = set(palavras_cap) | set(palavras_livro)
+    n_arquivos = max(len(material), 1)
+    df = {}
+    for p in todas_palavras:
+        cnt = 0
+        for texto in material.values():
+            if texto and p in texto.lower():
+                cnt += 1
+        df[p] = cnt / n_arquivos
 
+    def _palavra_distintiva(p: str) -> bool:
+        return df.get(p, 0.0) < 0.6
+
+    TAMANHO_CABECALHO = 2000
+
+    candidatos: list[tuple[int, str, str]] = []
     for nome, texto in material.items():
         score = 0
-        texto_lower = texto.lower()
-        nome_lower = nome.lower()
+        nome_l = nome.lower()
+        tl = texto.lower() if texto else ""
+        tl_inicio = tl[:TAMANHO_CABECALHO]
 
-        if sob_lower in nome_lower:
-            score += 10
-        if ano in nome:
-            score += 5
-        if sob_lower in texto_lower:
-            score += 3
-        if ano in texto:
-            score += 2
-        # Bônus por palavras do título na primeiras páginas do arquivo
-        cabecalho = texto_lower[:2000]
-        for p in titulo_palavras:
-            if p in cabecalho:
-                score += 1
+        nome_no_arquivo = sob_l in nome_l
+        ano_no_arquivo  = ano in nome
+        if nome_no_arquivo: score += 20
+        if ano_no_arquivo:  score += 10
+
+        if tl:
+            sob_no_texto = sob_l in tl
+            ano_no_texto = ano in tl
+
+            hits_cap = sum(1 for p in palavras_cap if p in tl)
+            hits_livro = sum(1 for p in palavras_livro if p in tl)
+
+            hits_cap_dist = sum(1 for p in palavras_cap
+                                 if p in tl and _palavra_distintiva(p))
+            hits_livro_dist = sum(1 for p in palavras_livro
+                                   if p in tl and _palavra_distintiva(p))
+            hits_cap_inicio = sum(1 for p in palavras_cap if p in tl_inicio)
+            hits_livro_inicio = sum(1 for p in palavras_livro if p in tl_inicio)
+
+            if nome_no_arquivo:
+                if sob_no_texto: score += 5
+                if ano_no_texto: score += 3
+                score += hits_cap * 2
+                score += hits_livro
+            else:
+                if eh_compendio:
+                    aceita_livro = (hits_livro_dist >= 3 and hits_livro_inicio >= 2)
+                    aceita_cap   = (sob_no_texto and hits_cap_dist >= 2 and hits_cap_inicio >= 1)
+                    if aceita_livro or aceita_cap:
+                        if sob_no_texto: score += 8
+                        if ano_no_texto: score += 3
+                        score += hits_cap * 2
+                        score += hits_livro * 2
+                else:
+                    if hits_cap_dist >= 3 and hits_cap_inicio >= 2:
+                        score += hits_cap * 2
+                        if sob_no_texto: score += 5
+                        if ano_no_texto: score += 3
+                    elif (hits_cap_dist >= 2 and hits_cap_inicio >= 2
+                          and sob_no_texto and ano_no_texto):
+                        score += hits_cap * 2 + 4
 
         if score > 0:
             candidatos.append((score, nome, texto))
