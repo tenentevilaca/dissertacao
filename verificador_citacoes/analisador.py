@@ -6,11 +6,13 @@ Reusa ler_docx, ler_arquivo e _extrair_trecho_relevante do verificador.py.
 import io
 import json
 import re
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional
 
 import anthropic
+import requests
 
 # ── Importações do módulo irmão ──────────────────────────────────────────
 from verificador import ler_docx, ler_arquivo, ler_docx_paragrafos, _extrair_trecho_relevante, _STOPWORDS_PT

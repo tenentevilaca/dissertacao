@@ -6,15 +6,15 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#1a3a5c">
+<meta name="theme-color" content="#3a3a2e">
 <link rel="manifest" href="/manifest.json">
 <title>Ferramentas Acadêmicas</title>
 <style>
 /* ── Reset & Base ─────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --azul:    #1e3a5f;
-  --azul2:   #2563eb;
+  --azul:    #3a3a2e;
+  --azul2:   #6b6b47;
   --verde:   #16a34a;
   --amarelo: #d97706;
   --vermelho:#dc2626;
@@ -27,14 +27,14 @@
 body {
   font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
   background: var(--fundo);
-  background-image: radial-gradient(circle at top right, #dbeafe 0%, transparent 45%);
+  background-image: radial-gradient(circle at top right, #e8e6d9 0%, transparent 45%);
   color: #1e293b;
   min-height: 100vh;
 }
 
 /* ── Header ──────────────────────────────────────────────── */
 header {
-  background: linear-gradient(120deg, var(--azul) 0%, #2c5282 100%);
+  background: linear-gradient(120deg, var(--azul) 0%, #52523a 100%);
   color: #fff;
   padding: 18px 32px;
   display: flex;
@@ -80,7 +80,7 @@ main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
   margin-bottom: 2px;
 }
 .step.ativo    { background: linear-gradient(120deg, var(--azul), var(--azul2)); color: #fff; }
-.step.completo { background: #dbeafe; color: var(--azul2); }
+.step.completo { background: #e8e6d9; color: var(--azul2); }
 
 /* ── Cards ───────────────────────────────────────────────── */
 .card {
@@ -114,7 +114,7 @@ main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
 }
 .dropzone:hover, .dropzone.drag-over {
   border-color: var(--azul2);
-  background: #eff6ff;
+  background: #f0efe5;
 }
 .dropzone input[type=file] {
   position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
@@ -127,7 +127,7 @@ main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: #dbeafe;
+  background: #e8e6d9;
   color: var(--azul2);
   border-radius: 20px;
   padding: 4px 12px;
@@ -137,7 +137,7 @@ main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
 }
 .file-badge button {
   background: none; border: none; cursor: pointer;
-  color: #93c5fd; font-size: 1rem; line-height: 1;
+  color: #b3b08f; font-size: 1rem; line-height: 1;
   padding: 0 0 0 2px;
 }
 .file-badge button:hover { color: var(--vermelho); }
@@ -246,12 +246,12 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 }
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-primary   { background: linear-gradient(120deg, var(--azul), var(--azul2)); color: #fff; box-shadow: 0 2px 10px rgba(37,99,235,.25); }
+.btn-primary   { background: linear-gradient(120deg, var(--azul), var(--azul2)); color: #fff; box-shadow: 0 2px 10px rgba(107,107,71,.25); }
 .btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(37,99,235,.35); }
 .btn-success   { background: var(--verde); color: #fff; }
 .btn-success:hover { background: #15803d; }
 .btn-outline   { background: transparent; color: var(--azul); border: 2px solid var(--azul); }
-.btn-outline:hover { background: #eff6ff; }
+.btn-outline:hover { background: #f0efe5; }
 .btn-sm        { padding: 7px 14px; font-size: .82rem; }
 
 .btn-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: flex-end; margin-top: 22px; }
@@ -270,7 +270,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
   min-height: 120px;
 }
 .log-info    { color: #94a3b8; }
-.log-etapa   { color: #60a5fa; font-weight: bold; }
+.log-etapa   { color: #a8a578; font-weight: bold; }
 .log-ok      { color: #4ade80; }
 .log-warn    { color: #fbbf24; }
 .log-erro    { color: #f87171; }
@@ -303,7 +303,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 .stat-incorreto { background: #fef2f2; color: var(--vermelho); }
 .stat-parcial   { background: #fffbeb; color: var(--amarelo); }
 .stat-neutro    { background: #f8fafc; color: var(--cinza); }
-.stat-aviso     { background: #eff6ff; color: var(--azul2); }
+.stat-aviso     { background: #f0efe5; color: var(--azul2); }
 
 /* ── Download área ────────────────────────────────────────── */
 .download-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
@@ -368,7 +368,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 .stat-anl-vermelho{ background: #fef2f2; color: var(--vermelho); }
 
 /* ── Download área analisador ─────────────────────────────── */
-.dl-btn-anl { background: #1a3a5c; color: #fff; }
+.dl-btn-anl { background: #3a3a2e; color: #fff; }
 .dl-btn-anl-txt { background: #475569; color: #fff; }
 .dl-btn-anl-json { background: #7c3aed; color: #fff; }
 
@@ -391,7 +391,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
   <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
     <rect width="36" height="36" rx="8" fill="rgba(255,255,255,.15)"/>
     <path d="M9 10h18M9 16h12M9 22h14M9 28h10" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
-    <circle cx="28" cy="26" r="5" fill="#60a5fa"/>
+    <circle cx="28" cy="26" r="5" fill="#a8a578"/>
     <path d="M26 26l1.5 1.5L30 24" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>
   <div>
@@ -676,7 +676,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
         Ela não é armazenada — usada apenas nesta sessão.
       </p>
 
-      <div style="margin-top:18px;padding:14px;background:#eff6ff;border-radius:8px;border:1px solid #bfdbfe;font-size:.84rem;color:#1e40af">
+      <div style="margin-top:18px;padding:14px;background:#f0efe5;border-radius:8px;border:1px solid #d9d6c2;font-size:.84rem;color:#3a3a2e">
         <b>O que esta análise faz:</b><br>
         ① Extrai autor, título, programa e objetivos automaticamente do seu .docx<br>
         ② Detecta e analisa cada capítulo: estrutura, teoria, estilo ABNT<br>
@@ -1414,7 +1414,7 @@ function anlMostrarRelatorio(resumo, jobId) {
   ).join('');
 
   const docxBtn = resumo.docx_disponivel
-    ? `<a class="dl-btn dl-html" style="background:#1a3a5c;color:#fff" href="/dissertacao-revisada/${jobId}" download>
+    ? `<a class="dl-btn dl-html" style="background:#3a3a2e;color:#fff" href="/dissertacao-revisada/${jobId}" download>
          📝 Baixar Dissertação Revisada (.docx)
        </a>`
     : '';
