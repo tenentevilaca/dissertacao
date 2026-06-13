@@ -311,7 +311,7 @@ def _rodar_localizar_referencias(
             mp = Path(mat_path)
             if mp.suffix.lower() == ".zip":
                 log(f"   Extraindo {mp.name}…")
-                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp).items():
+                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp, log).items():
                     material[nome] = texto
                     material_bytes[nome] = dados
                     log(f"   ✓ {nome} ({len(texto):,} chars)")
@@ -330,7 +330,7 @@ def _rodar_localizar_referencias(
             drive_path, drive_ext = baixar_google_drive_path(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
                 try:
-                    for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_path).items():
+                    for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_path, log).items():
                         material[nome] = texto
                         material_bytes[nome] = dados
                         log(f"   ✓ {nome} ({len(texto):,} chars)")
@@ -427,7 +427,7 @@ async def iniciar_analise(
     def _salvar_referencia(nome: str, dados, from_path: bool = False):
         suffix = Path(nome).suffix.lower()
         if suffix == ".zip":
-            for sub_nome, (_texto, sub_dados) in extrair_material_de_zip_com_bytes(dados).items():
+            for sub_nome, (_texto, sub_dados) in extrair_material_de_zip_com_bytes(dados, log).items():
                 (refs_dir / sub_nome).write_bytes(sub_dados)
             if from_path:
                 try:

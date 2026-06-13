@@ -775,7 +775,7 @@ def localizar_referencias(
     return resultados
 
 
-def extrair_material_de_zip_com_bytes(zip_source) -> dict[str, tuple[str, bytes]]:
+def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tuple[str, bytes]]:
     """
     Como `extrair_material_de_zip`, mas também retorna os bytes originais de
     cada arquivo (para permitir download direto pelo nome do arquivo).
@@ -789,19 +789,30 @@ def extrair_material_de_zip_com_bytes(zip_source) -> dict[str, tuple[str, bytes]
     material: dict[str, tuple[str, bytes]] = {}
 
     with zipfile.ZipFile(zip_arg) as z:
-        for info in z.infolist():
+        membros = [
+            info for info in z.infolist()
+            if not Path(info.filename).name.startswith("~$")
+            and not info.is_dir()
+            and Path(info.filename).suffix.lower() in EXTENSOES_APOIO
+        ]
+        total = len(membros)
+        if log_fn:
+            log_fn(f"   {total} arquivo(s) de apoio no zip, extraindo...")
+        for idx, info in enumerate(membros, 1):
             nome = Path(info.filename).name
-            if nome.startswith("~$") or info.is_dir():
-                continue
             ext = Path(info.filename).suffix.lower()
-            if ext not in EXTENSOES_APOIO:
-                continue
+            if log_fn:
+                log_fn(f"   [{idx}/{total}] lendo {nome}...")
             try:
                 data = z.read(info)
                 texto = _ler_bytes(data, ext)
                 if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
                     material[nome[:80]] = (texto, data)
-            except Exception:
+                elif log_fn:
+                    log_fn(f"      (ignorado: sem texto extraível)")
+            except Exception as e:
+                if log_fn:
+                    log_fn(f"      (erro: {e})")
                 continue
 
     return material
