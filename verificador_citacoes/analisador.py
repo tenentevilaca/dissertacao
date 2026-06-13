@@ -436,9 +436,13 @@ def detectar_capitulos_docx(diss_path: str) -> list[tuple[str, str]] | None:
 # LOCALIZADOR DE REFERÊNCIAS NO MATERIAL DE APOIO
 # ════════════════════════════════════════════════════════════════════════
 
-# Linha de referência ABNT começa com SOBRENOME(S) em maiúsculas seguido de vírgula
-_RE_REF_AUTOR = re.compile(r"^([A-ZÀ-ÝÇ][A-ZÀ-ÝÇ\s\-'\.]{1,60}?),")
+# Linha de referência ABNT começa com SOBRENOME(S) seguido de vírgula. Aceita
+# também sobrenomes em minúsculas/mistas (estilo APA copiado), numeração
+# ("1. SOBRENOME, ...") e marcadores de lista ("- Sobrenome, ...").
+_RE_INICIO_NUM = re.compile(r"^(?:[\(\[]?\d+[\.\)\]]|-|•|\*)\s*")
+_RE_REF_AUTOR = re.compile(r"^([A-ZÀ-ÝÇa-zà-ÿ][A-ZÀ-ÝÇa-zà-ÿ\s\-'\.]{1,60}?),")
 _RE_ANO_REF = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+_RE_CABECALHO_REFS = re.compile(r"^\s*REFER[EÊ]NCIAS(\s+BIBLIOGR[ÁA]FICAS?)?\s*$", re.IGNORECASE)
 
 
 def parsear_lista_referencias(texto: str) -> list[str]:
@@ -446,12 +450,18 @@ def parsear_lista_referencias(texto: str) -> list[str]:
     Quebra um texto de lista de referências (ABNT) em entradas individuais.
     Entradas começam em linhas no formato 'SOBRENOME, Nome...' — linhas
     seguintes sem esse padrão são consideradas continuação (entradas com
-    recuo/quebra de linha).
+    recuo/quebra de linha). Cabeçalho "REFERÊNCIAS" e marcadores de lista
+    (numeração, bullets) são ignorados.
     """
     refs: list[str] = []
     atual = ""
     for linha in texto.split("\n"):
         l = linha.strip()
+        if not l:
+            continue
+        if _RE_CABECALHO_REFS.match(l):
+            continue
+        l = _RE_INICIO_NUM.sub("", l).strip()
         if not l:
             continue
         if _RE_REF_AUTOR.match(l):
