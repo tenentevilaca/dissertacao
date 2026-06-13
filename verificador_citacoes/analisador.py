@@ -42,22 +42,34 @@ def _extrair_id_drive(url: str) -> str:
     )
 
 
-def baixar_google_drive_bytes(url: str, log_fn=None) -> tuple:
+def _cache_dir() -> Path:
+    d = Path(tempfile.gettempdir()) / "drive_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def baixar_google_drive_bytes(url: str, log_fn=None, usar_cache: bool = True) -> tuple:
     """
     Baixa arquivo do Google Drive direto na memória (sem salvar no disco).
+    Faz download em streaming (chunks), com timeout e log de progresso.
+    Usa cache em disco (por file_id) para evitar reprocessar a mesma URL.
     Retorna (bytes, extensao).
     """
-    import urllib.request
-    import http.cookiejar
-
     file_id = _extrair_id_drive(url)
     if log_fn:
         log_fn(f"   ID do arquivo: {file_id}")
 
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+    # ── Cache em disco ────────────────────────────────────────────────
+    cache_meta = _cache_dir() / f"{file_id}.ext"
+    cache_data = _cache_dir() / f"{file_id}.bin"
+    if usar_cache and cache_meta.exists() and cache_data.exists():
+        ext = cache_meta.read_text().strip()
+        data = cache_data.read_bytes()
+        if log_fn:
+            log_fn(f"   Usando cache local: {len(data)/(1024*1024):.1f} MB ({ext})")
+        return data, ext
 
+    headers = {"User-Agent": "Mozilla/5.0"}
     urls_tentar = [
         f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t",
         f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
@@ -71,17 +83,32 @@ def baixar_google_drive_bytes(url: str, log_fn=None) -> tuple:
         if log_fn:
             log_fn("   Conectando ao Google Drive...")
         try:
-            resp = opener.open(tentativa_url, timeout=300)
-            content_type = resp.headers.get("Content-Type", "")
-            data = resp.read()
-            resp_final = resp
-            if "text/html" in content_type and len(data) < 500_000:
+            with requests.get(tentativa_url, headers=headers, stream=True, timeout=(15, 60)) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                resp_final = resp
+
+                buf = io.BytesIO()
+                baixado = 0
+                proximo_log = 1 * 1024 * 1024  # loga a cada 1 MB
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    buf.write(chunk)
+                    baixado += len(chunk)
+                    if log_fn and baixado >= proximo_log:
+                        log_fn(f"   ...{baixado/(1024*1024):.1f} MB baixados")
+                        proximo_log += 1 * 1024 * 1024
+
+                conteudo = buf.getvalue()
+
+            if "text/html" in content_type and len(conteudo) < 500_000:
                 if log_fn:
                     log_fn("   Resposta HTML, tentando alternativa...")
-                data = None
                 continue
+
+            data = conteudo
             break
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             if log_fn:
                 log_fn(f"   Tentativa falhou: {e}")
             continue
@@ -94,7 +121,7 @@ def baixar_google_drive_bytes(url: str, log_fn=None) -> tuple:
 
     # Detecta extensão
     ext = ".zip"
-    if resp_final:
+    if resp_final is not None:
         cd = resp_final.headers.get("Content-Disposition", "")
         m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
         if m_cd:
@@ -103,6 +130,13 @@ def baixar_google_drive_bytes(url: str, log_fn=None) -> tuple:
         ext = ".pdf"
     elif "msword" in content_type or "wordprocessing" in content_type:
         ext = ".docx"
+
+    if usar_cache:
+        try:
+            cache_data.write_bytes(data)
+            cache_meta.write_text(ext)
+        except OSError:
+            pass  # cache é best-effort; falha não deve interromper o fluxo
 
     return data, ext
 

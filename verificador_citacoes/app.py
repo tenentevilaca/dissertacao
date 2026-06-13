@@ -326,7 +326,7 @@ def _rodar_localizar_referencias(
 
         if not mat_paths and drive_url:
             log("   Baixando material do Google Drive…")
-            drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url)
+            drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
                 for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_bytes).items():
                     material[nome] = texto
