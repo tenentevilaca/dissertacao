@@ -90,7 +90,7 @@ def extrair_texto_doc_legado(data: bytes) -> str:
     buf = []
     while i < n - 1:
         lo, hi = data[i], data[i + 1]
-        if hi == 0x00 and (0x20 <= lo <= 0x7E):
+        if hi == 0x00 and (0x20 <= lo <= 0x7E or 0xC0 <= lo <= 0xFF):
             buf.append(chr(lo))
             i += 2
         else:
@@ -125,6 +125,13 @@ def extrair_texto_doc_legado(data: bytes) -> str:
 def ler_docx(caminho: str | Path) -> str:
     """Lê um .docx (ou .doc) e retorna o texto completo (corpo + notas de rodapé)."""
     partes: list[str] = []
+    try:
+        with open(caminho, "rb") as fh:
+            assinatura = fh.read(8)
+        if assinatura == _OLE_MAGIC:
+            return extrair_texto_doc_legado(Path(caminho).read_bytes())
+    except Exception:
+        pass
     try:
         with zipfile.ZipFile(str(caminho)) as z:
             nomes = z.namelist()
