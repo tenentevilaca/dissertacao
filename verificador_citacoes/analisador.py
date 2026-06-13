@@ -8,6 +8,7 @@ import json
 import re
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Optional
 
@@ -805,7 +806,14 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 log_fn(f"   [{idx}/{total}] lendo {nome}...")
             try:
                 data = z.read(info)
-                texto = _ler_bytes(data, ext)
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(_ler_bytes, data, ext)
+                    try:
+                        texto = fut.result(timeout=60)
+                    except FuturesTimeout:
+                        if log_fn:
+                            log_fn(f"      (ignorado: demorou mais de 60s para extrair)")
+                        continue
                 if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
                     material[nome[:80]] = (texto, data)
                 elif log_fn:
