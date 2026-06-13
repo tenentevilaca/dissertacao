@@ -284,6 +284,7 @@ def _rodar_localizar_referencias(
             localizar_referencias,
             extrair_material_de_zip_com_bytes,
             baixar_google_drive_bytes,
+            baixar_google_drive_path,
             _ler_bytes as _ler_bytes_apoio,
         )
         from verificador import ler_arquivo
@@ -326,13 +327,24 @@ def _rodar_localizar_referencias(
 
         if not mat_paths and drive_url:
             log("   Baixando material do Google Drive…")
-            drive_bytes, drive_ext = baixar_google_drive_bytes(drive_url, log_fn=log)
+            drive_path, drive_ext = baixar_google_drive_path(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
-                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_bytes).items():
-                    material[nome] = texto
-                    material_bytes[nome] = dados
-                    log(f"   ✓ {nome} ({len(texto):,} chars)")
+                try:
+                    for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_path).items():
+                        material[nome] = texto
+                        material_bytes[nome] = dados
+                        log(f"   ✓ {nome} ({len(texto):,} chars)")
+                finally:
+                    try:
+                        drive_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
             else:
+                drive_bytes = drive_path.read_bytes()
+                try:
+                    drive_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 texto = _ler_bytes_apoio(drive_bytes, drive_ext)
                 if texto and len(texto) > 100:
                     nome = f"arquivo_drive{drive_ext}"
@@ -384,7 +396,7 @@ async def iniciar_analise(
     sem_verificacao: str = Form("false"),
     material_localizado_job_id: str = Form(""),
 ):
-    from analisador import extrair_material_de_zip_com_bytes, baixar_google_drive_bytes
+    from analisador import extrair_material_de_zip_com_bytes, baixar_google_drive_bytes, baixar_google_drive_path
 
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
@@ -402,30 +414,40 @@ async def iniciar_analise(
         diss_path = Path(tmpdir) / dissertacao.filename
         diss_path.write_bytes(await dissertacao.read())
     elif dissertacao_drive_url.strip():
-        diss_bytes, diss_ext = baixar_google_drive_bytes(dissertacao_drive_url.strip())
+        diss_src_path, diss_ext = baixar_google_drive_path(dissertacao_drive_url.strip())
         diss_path = Path(tmpdir) / f"dissertacao{diss_ext}"
-        diss_path.write_bytes(diss_bytes)
+        import shutil
+        shutil.move(str(diss_src_path), str(diss_path))
     else:
         raise HTTPException(400, "Envie a dissertação como arquivo ou link do Google Drive")
 
     refs_dir = Path(tmpdir) / "referencias"
     refs_dir.mkdir()
 
-    def _salvar_referencia(nome: str, dados: bytes):
+    def _salvar_referencia(nome: str, dados, from_path: bool = False):
         suffix = Path(nome).suffix.lower()
         if suffix == ".zip":
             for sub_nome, (_texto, sub_dados) in extrair_material_de_zip_com_bytes(dados).items():
                 (refs_dir / sub_nome).write_bytes(sub_dados)
+            if from_path:
+                try:
+                    Path(dados).unlink(missing_ok=True)
+                except OSError:
+                    pass
         else:
-            (refs_dir / nome).write_bytes(dados)
+            if from_path:
+                import shutil
+                shutil.move(str(dados), str(refs_dir / nome))
+            else:
+                (refs_dir / nome).write_bytes(dados)
 
     for arq in referencias:
         if arq and arq.filename:
             _salvar_referencia(arq.filename, await arq.read())
 
     if referencias_drive_url.strip():
-        drive_bytes, drive_ext = baixar_google_drive_bytes(referencias_drive_url.strip())
-        _salvar_referencia(f"referencias_drive{drive_ext}", drive_bytes)
+        drive_path, drive_ext = baixar_google_drive_path(referencias_drive_url.strip())
+        _salvar_referencia(f"referencias_drive{drive_ext}", drive_path, from_path=True)
 
     # Converte sem_verificacao (vem como string do FormData JS)
     sem_verif_bool = str(sem_verificacao).lower() in ("true", "1", "yes")

@@ -158,7 +158,102 @@ def baixar_google_drive_bytes(url: str, log_fn=None, usar_cache: bool = True) ->
 
     return conteudo, ext
 
-    return data, ext
+
+def baixar_google_drive_path(url: str, log_fn=None, usar_cache: bool = True) -> tuple:
+    """
+    Baixa arquivo do Google Drive para um arquivo em disco (drive_cache/),
+    sem nunca carregar o conteúdo inteiro em memória.
+    Retorna (Path, extensao).
+    """
+    file_id = _extrair_id_drive(url)
+    if log_fn:
+        log_fn(f"   ID do arquivo: {file_id}")
+
+    cache_meta = _cache_dir() / f"{file_id}.ext"
+    cache_data = _cache_dir() / f"{file_id}.bin"
+    if usar_cache and cache_meta.exists() and cache_data.exists():
+        ext = cache_meta.read_text().strip()
+        if log_fn:
+            tamanho = cache_data.stat().st_size
+            log_fn(f"   Usando cache local: {tamanho/(1024*1024):.1f} MB ({ext})")
+        return cache_data, ext
+
+    headers = {"User-Agent": "Mozilla/5.0"}
+    urls_tentar = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0&confirm=t",
+        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t",
+    ]
+
+    data = None
+    content_type = ""
+    resp_final = None
+
+    for tentativa_url in urls_tentar:
+        if log_fn:
+            log_fn("   Conectando ao Google Drive...")
+        try:
+            with requests.get(tentativa_url, headers=headers, stream=True, timeout=(15, 60)) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                resp_final = resp
+
+                tmp_path = _cache_dir() / f"{file_id}.part"
+                baixado = 0
+                proximo_log = 1 * 1024 * 1024
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        baixado += len(chunk)
+                        if log_fn and baixado >= proximo_log:
+                            log_fn(f"   ...{baixado/(1024*1024):.1f} MB baixados")
+                            proximo_log += 1 * 1024 * 1024
+
+            if "text/html" in content_type and tmp_path.stat().st_size < 500_000:
+                if log_fn:
+                    log_fn("   Resposta HTML, tentando alternativa...")
+                tmp_path.unlink(missing_ok=True)
+                continue
+
+            data = tmp_path
+            break
+        except requests.exceptions.RequestException as e:
+            if log_fn:
+                log_fn(f"   Tentativa falhou: {e}")
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except (OSError, NameError):
+                pass
+            continue
+
+    if not data or not Path(data).exists() or Path(data).stat().st_size < 1000:
+        raise ValueError("Nao foi possivel baixar o arquivo. Verifique se o link esta publico.")
+
+    tamanho_total = Path(data).stat().st_size
+    if log_fn:
+        log_fn(f"   Download concluido: {tamanho_total/(1024*1024):.1f} MB")
+
+    ext = ".zip"
+    if resp_final is not None:
+        cd = resp_final.headers.get("Content-Disposition", "")
+        m_cd = re.search(r'filename[^;=\n]*=\s*["\']?([^"\'\n;]+)', cd)
+        if m_cd:
+            ext = Path(m_cd.group(1).strip()).suffix or ext
+    if "pdf" in content_type:
+        ext = ".pdf"
+    elif "msword" in content_type or "wordprocessing" in content_type:
+        ext = ".docx"
+
+    tmp_path = Path(data)
+    if usar_cache:
+        try:
+            tmp_path.replace(cache_data)
+            cache_meta.write_text(ext)
+            return cache_data, ext
+        except OSError:
+            pass
+
+    return tmp_path, ext
 
 
 def baixar_google_drive(url: str, destino: Path, log_fn=None) -> Path:
@@ -687,13 +782,13 @@ def extrair_material_de_zip_com_bytes(zip_source) -> dict[str, tuple[str, bytes]
     Retorna dict nome_arquivo → (texto, bytes).
     """
     if isinstance(zip_source, (str, Path)):
-        zip_bytes = Path(zip_source).read_bytes()
+        zip_arg = Path(zip_source)
     else:
-        zip_bytes = zip_source
+        zip_arg = io.BytesIO(zip_source)
 
     material: dict[str, tuple[str, bytes]] = {}
 
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+    with zipfile.ZipFile(zip_arg) as z:
         for info in z.infolist():
             nome = Path(info.filename).name
             if nome.startswith("~$") or info.is_dir():
