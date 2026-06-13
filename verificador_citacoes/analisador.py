@@ -725,7 +725,9 @@ def _ler_bytes(data: bytes, ext: str) -> str:
         if ext == ".txt":
             return data.decode("utf-8", errors="replace")
         elif ext in (".docx", ".doc"):
-            from verificador import _xml_para_texto
+            from verificador import _xml_para_texto, extrair_texto_doc_legado, _OLE_MAGIC
+            if data.startswith(_OLE_MAGIC):
+                return extrair_texto_doc_legado(data)
             with zipfile.ZipFile(io.BytesIO(data)) as z:
                 partes = []
                 if "word/document.xml" in z.namelist():

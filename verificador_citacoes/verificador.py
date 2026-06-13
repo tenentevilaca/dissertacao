@@ -67,8 +67,63 @@ def _xml_para_texto(xml_bytes: bytes) -> str:
         return ""
 
 
+# Assinatura (magic bytes) do formato OLE/CFBF usado pelo .doc binário antigo
+_OLE_MAGIC = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1"
+
+
+def extrair_texto_doc_legado(data: bytes) -> str:
+    """Extrai texto de um .doc binário antigo (OLE/CFBF, pré-2007).
+
+    Não há um parser estruturado simples sem dependências externas, então
+    usamos uma heurística pragmática: percorrer os bytes brutos procurando
+    sequências de texto imprimível em UTF-16LE (formato mais comum para o
+    stream "WordDocument") e, como reforço, em Latin-1/ASCII. Sequências
+    muito curtas são descartadas para reduzir ruído. O resultado não é
+    perfeito, mas costuma ser suficiente para que as regex de identificação
+    de referências encontrem os trechos relevantes.
+    """
+    textos: list[str] = []
+
+    # 1) Tentativa UTF-16LE: pares de bytes (char, 0x00) formando texto imprimível
+    i = 0
+    n = len(data)
+    buf = []
+    while i < n - 1:
+        lo, hi = data[i], data[i + 1]
+        if hi == 0x00 and (0x20 <= lo <= 0x7E):
+            buf.append(chr(lo))
+            i += 2
+        else:
+            if len(buf) >= 4:
+                textos.append("".join(buf))
+            buf = []
+            i += 1
+    if len(buf) >= 4:
+        textos.append("".join(buf))
+
+    # 2) Reforço: sequências longas de ASCII/Latin-1 imprimível direto nos bytes
+    buf = []
+    for b in data:
+        if 0x20 <= b <= 0x7E or b in (0x09, 0x0A, 0x0D):
+            buf.append(chr(b))
+        else:
+            if len(buf) >= 6:
+                trecho = "".join(buf).strip()
+                if trecho:
+                    textos.append(trecho)
+            buf = []
+    if len(buf) >= 6:
+        trecho = "".join(buf).strip()
+        if trecho:
+            textos.append(trecho)
+
+    texto = "\n".join(textos)
+    texto = re.sub(r"\n{3,}", "\n\n", texto)
+    return texto.strip()
+
+
 def ler_docx(caminho: str | Path) -> str:
-    """Lê um .docx e retorna o texto completo (corpo + notas de rodapé)."""
+    """Lê um .docx (ou .doc) e retorna o texto completo (corpo + notas de rodapé)."""
     partes: list[str] = []
     try:
         with zipfile.ZipFile(str(caminho)) as z:
@@ -81,6 +136,15 @@ def ler_docx(caminho: str | Path) -> str:
             if "word/endnotes.xml" in nomes:
                 partes.append(_xml_para_texto(z.read("word/endnotes.xml")))
     except zipfile.BadZipFile:
+        # Pode ser um .doc binário antigo (OLE/CFBF) ou um .docx corrompido
+        try:
+            data = Path(caminho).read_bytes()
+        except Exception as e:
+            return f"[ERRO ao abrir arquivo: {e}]"
+
+        if data.startswith(_OLE_MAGIC):
+            return extrair_texto_doc_legado(data)
+
         try:
             import docx as _docx
             doc = _docx.Document(str(caminho))
