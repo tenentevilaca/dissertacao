@@ -87,37 +87,46 @@ def baixar_google_drive_bytes(url: str, log_fn=None, usar_cache: bool = True) ->
                 content_type = resp.headers.get("Content-Type", "")
                 resp_final = resp
 
-                buf = io.BytesIO()
+                # Baixa direto para um arquivo temporário em disco, evitando
+                # acumular o arquivo inteiro em memória (causava OOM em
+                # arquivos grandes no plano free do Render, travando perto
+                # do limite de RAM).
+                tmp_path = _cache_dir() / f"{file_id}.part"
                 baixado = 0
                 proximo_log = 1 * 1024 * 1024  # loga a cada 1 MB
-                for chunk in resp.iter_content(chunk_size=64 * 1024):
-                    if not chunk:
-                        continue
-                    buf.write(chunk)
-                    baixado += len(chunk)
-                    if log_fn and baixado >= proximo_log:
-                        log_fn(f"   ...{baixado/(1024*1024):.1f} MB baixados")
-                        proximo_log += 1 * 1024 * 1024
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        baixado += len(chunk)
+                        if log_fn and baixado >= proximo_log:
+                            log_fn(f"   ...{baixado/(1024*1024):.1f} MB baixados")
+                            proximo_log += 1 * 1024 * 1024
 
-                conteudo = buf.getvalue()
-
-            if "text/html" in content_type and len(conteudo) < 500_000:
+            if "text/html" in content_type and tmp_path.stat().st_size < 500_000:
                 if log_fn:
                     log_fn("   Resposta HTML, tentando alternativa...")
+                tmp_path.unlink(missing_ok=True)
                 continue
 
-            data = conteudo
+            data = tmp_path
             break
         except requests.exceptions.RequestException as e:
             if log_fn:
                 log_fn(f"   Tentativa falhou: {e}")
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except (OSError, NameError):
+                pass
             continue
 
-    if not data or len(data) < 1000:
+    if not data or not Path(data).exists() or Path(data).stat().st_size < 1000:
         raise ValueError("Nao foi possivel baixar o arquivo. Verifique se o link esta publico.")
 
+    tamanho_total = Path(data).stat().st_size
     if log_fn:
-        log_fn(f"   Download concluido: {len(data)/(1024*1024):.1f} MB")
+        log_fn(f"   Download concluido: {tamanho_total/(1024*1024):.1f} MB")
 
     # Detecta extensão
     ext = ".zip"
@@ -131,12 +140,23 @@ def baixar_google_drive_bytes(url: str, log_fn=None, usar_cache: bool = True) ->
     elif "msword" in content_type or "wordprocessing" in content_type:
         ext = ".docx"
 
+    tmp_path = Path(data)
     if usar_cache:
         try:
-            cache_data.write_bytes(data)
+            tmp_path.replace(cache_data)
             cache_meta.write_text(ext)
+            tmp_path = cache_data
         except OSError:
             pass  # cache é best-effort; falha não deve interromper o fluxo
+
+    conteudo = tmp_path.read_bytes()
+    if tmp_path is not cache_data:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return conteudo, ext
 
     return data, ext
 
