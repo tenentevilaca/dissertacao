@@ -8,7 +8,6 @@ import json
 import re
 import tempfile
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Optional
 
@@ -875,16 +874,7 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 data = z.read(info)
                 if len(data) > 25 * 1024 * 1024 and log_fn:
                     log_fn(f"      (arquivo grande: {len(data)/(1024*1024):.1f} MB — extraindo apenas trechos iniciais/finais do PDF)")
-                ex = ThreadPoolExecutor(max_workers=1)
-                fut = ex.submit(_ler_bytes, data, ext)
-                try:
-                    texto = fut.result(timeout=60)
-                except FuturesTimeout:
-                    if log_fn:
-                        log_fn(f"      (ignorado: demorou mais de 60s para extrair)")
-                    ex.shutdown(wait=False)
-                    continue
-                ex.shutdown(wait=False)
+                texto = _ler_bytes(data, ext)
                 if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
                     material[nome[:80]] = (texto, data)
                 elif log_fn:
@@ -927,13 +917,12 @@ def _ler_bytes(data: bytes, ext: str) -> str:
     return ""
 
 
-_PDF_MAX_CHARS = 400_000
+_PDF_MAX_CHARS = 150_000
 _PDF_PAGINAS_INICIO = 30
 _PDF_PAGINAS_FIM = 10
 _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA = 25 * 1024 * 1024
 _PDF_SLICE_MEIO_CHARS = 300
 _PDF_PASSO_MEIO = 4  # amostra 1 a cada N páginas do meio, para reduzir chamadas get_text()
-_PDF_TIMEOUT_SEGUNDOS = 60
 
 
 def _ler_pdf_limitado(data: bytes) -> str:
@@ -998,7 +987,7 @@ def _ler_pdf_limitado(data: bytes) -> str:
                 partes.append(doc[i].get_text())
 
             # 3. Páginas do meio: amostragem (1 a cada N) com trecho inicial
-            for i in meio[::_PDF_PASSO_MEIO]:
+            for i in meio[::_PDF_PASSO_MEIO][:100]:
                 partes.append(doc[i].get_text()[:_PDF_SLICE_MEIO_CHARS])
 
             # 4. Últimas páginas, texto completo
@@ -1010,14 +999,7 @@ def _ler_pdf_limitado(data: bytes) -> str:
         finally:
             doc.close()
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(_extrair)
-    try:
-        resultado = future.result(timeout=_PDF_TIMEOUT_SEGUNDOS)
-    except FuturesTimeout:
-        resultado = "[ERRO: tempo limite excedido ao extrair texto do PDF]"
-    executor.shutdown(wait=False)
-    return resultado
+    return _extrair()
 
 
 def extrair_material_de_zip(zip_source, destino: Path = None) -> dict[str, str]:
