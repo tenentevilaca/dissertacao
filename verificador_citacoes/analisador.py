@@ -930,6 +930,7 @@ _PDF_PAGINAS_INICIO = 30
 _PDF_PAGINAS_FIM = 10
 _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA = 25 * 1024 * 1024
 _PDF_SLICE_MEIO_CHARS = 300
+_PDF_PASSO_MEIO = 4  # amostra 1 a cada N páginas do meio, para reduzir chamadas get_text()
 _PDF_TIMEOUT_SEGUNDOS = 60
 
 
@@ -994,8 +995,8 @@ def _ler_pdf_limitado(data: bytes) -> str:
             for i in sorted(inicio):
                 partes.append(doc[i].get_text())
 
-            # 3. Páginas do meio: apenas um pequeno trecho inicial de cada
-            for i in meio:
+            # 3. Páginas do meio: amostragem (1 a cada N) com trecho inicial
+            for i in meio[::_PDF_PASSO_MEIO]:
                 partes.append(doc[i].get_text()[:_PDF_SLICE_MEIO_CHARS])
 
             # 4. Últimas páginas, texto completo
