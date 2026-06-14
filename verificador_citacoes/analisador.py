@@ -774,6 +774,66 @@ def localizar_referencias(
     return resultados
 
 
+def relocalizar_nao_encontrados_com_ia(
+    resultado: dict,
+    material: dict[str, str],
+    api_key: str,
+    log_fn=None,
+) -> dict:
+    """
+    Reprocessa, usando IA, apenas os itens de `resultado["itens"]` que ainda
+    não têm arquivo encontrado — para evitar gastar chamadas de API nos itens
+    já resolvidos pelo matching por sobrenome/ano/título.
+    """
+    materiais_lower = {nome: txt.lower() for nome, txt in material.items()}
+    itens = resultado.get("itens", [])
+    pendentes = [it for it in itens if not it.get("encontrado")]
+
+    for idx, item in enumerate(pendentes, 1):
+        ref = item["referencia"]
+        autor, ano = _extrair_autor_ano_referencia(ref)
+
+        titulo_palavras = [
+            p for p in re.findall(r"[a-záéíóúâêîôûãõàç]{4,}", ref.lower())
+            if p not in _STOPWORDS_PT
+        ][:8]
+
+        fracos: list[tuple[float, str]] = []
+        for nome_arq, texto_low in materiais_lower.items():
+            tem_autor = bool(autor) and texto_low.count(autor.lower()) > 0
+            tem_titulo = sum(1 for p in titulo_palavras if p in texto_low[:3000]) >= 2
+            if not (tem_autor or tem_titulo):
+                continue
+            pontos = 0.0
+            if autor:
+                pontos += texto_low.count(autor.lower()) * 2
+            if ano and ano in material[nome_arq]:
+                pontos += 1
+            pontos += sum(1 for p in titulo_palavras if p in texto_low[:3000])
+            fracos.append((pontos, nome_arq))
+
+        fracos.sort(key=lambda x: -x[0])
+        candidatos = [nome for _, nome in fracos[:5]]
+
+        escolhido = None
+        if candidatos:
+            escolhido = _desambiguar_com_ia(ref, candidatos, material, api_key)
+
+        if log_fn:
+            log_fn(idx, len(pendentes), ref, bool(escolhido), [escolhido] if escolhido else [])
+
+        if escolhido:
+            item["arquivos"] = [escolhido]
+            item["encontrado"] = True
+
+    arquivos_relevantes = sorted({
+        nome for item in itens for nome in item["arquivos"]
+    })
+    resultado["arquivos_relevantes"] = arquivos_relevantes
+    resultado["n_arquivos_relevantes"] = len(arquivos_relevantes)
+    return resultado
+
+
 def gerar_relatorio_localizar(resultado: dict, rel_dir: Path) -> None:
     """
     Gera um relatório HTML simples com o resultado da busca "Localizar

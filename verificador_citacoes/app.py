@@ -280,6 +280,36 @@ async def baixar_relatorio_localizar(job_id: str, formato: str):
     )
 
 
+@app.post("/relocalizar-ia/{job_id}")
+async def relocalizar_ia(job_id: str, api_key: str = Form("")):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    job = _jobs[job_id]
+    resultado = job.get("resultado")
+    if not resultado or "itens" not in resultado:
+        raise HTTPException(400, "Resultado ainda não disponível")
+    if not api_key.strip():
+        raise HTTPException(400, "Chave de API obrigatória")
+
+    material = job.get("material_texto") or {}
+    from analisador import relocalizar_nao_encontrados_com_ia, gerar_relatorio_localizar
+
+    def log_ref(i, total, ref, encontrado, arquivos):
+        job["logs"].append(
+            f"   [IA {i}/{total}] {'✓' if encontrado else '✗'} {ref[:70]}"
+            + (f" → {arquivos[0]}" if arquivos else "")
+        )
+
+    resultado = relocalizar_nao_encontrados_com_ia(resultado, material, api_key.strip(), log_fn=log_ref)
+    job["resultado"] = resultado
+
+    rel_dir = job.get("relatorio_dir") or str(Path(job["tmpdir"]) / "relatorio")
+    gerar_relatorio_localizar(resultado, Path(rel_dir))
+    job["relatorio_dir"] = rel_dir
+
+    return {"resultado": resultado}
+
+
 @app.get("/material-arquivo/{job_id}/{nome_arquivo}")
 async def baixar_material_arquivo(job_id: str, nome_arquivo: str):
     if job_id not in _jobs:

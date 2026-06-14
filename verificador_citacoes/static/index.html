@@ -775,6 +775,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
 
     <div id="loc-status" class="loc-status"></div>
     <div id="loc-logs" class="log-box" style="display:none;max-height:240px;overflow-y:auto;margin-top:10px;"></div>
+    <div id="loc-ia-extra" style="margin-top:8px;"></div>
     <div id="loc-import" style="margin-top:8px;"></div>
     <div class="download-row" id="loc-download-row"></div>
     <div id="loc-resultado" style="margin-top:16px;"></div>
@@ -1189,6 +1190,17 @@ function locMostrarResultado(resultado, jobId) {
     </a>
   `;
 
+  const naoEncontrados = itens.filter(it => !it.encontrado).length;
+  const iaEl = document.getElementById('loc-ia-extra');
+  if (naoEncontrados > 0) {
+    iaEl.innerHTML = `
+      <button class="loc-import-btn" onclick="locRodarIaExtra('${jobId}')">
+        🤖 Tentar IA nas ${naoEncontrados} referência(s) não encontrada(s)
+      </button>`;
+  } else {
+    iaEl.innerHTML = '';
+  }
+
   const importEl = document.getElementById('loc-import');
   if (resultado.n_arquivos_relevantes > 0) {
     importEl.innerHTML = `
@@ -1197,6 +1209,29 @@ function locMostrarResultado(resultado, jobId) {
       </button>`;
   } else {
     importEl.innerHTML = '';
+  }
+}
+
+async function locRodarIaExtra(jobId) {
+  const apiKey = document.getElementById('loc-apikey').value.trim();
+  if (!apiKey) {
+    alert('Informe a chave de API da Anthropic para usar a IA.');
+    return;
+  }
+  const iaEl = document.getElementById('loc-ia-extra');
+  iaEl.innerHTML = '⏳ Consultando IA para as referências não encontradas...';
+  try {
+    const fd = new FormData();
+    fd.append('api_key', apiKey);
+    const resp = await fetch(`/relocalizar-ia/${jobId}`, { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `erro ${resp.status}`);
+    }
+    const data = await resp.json();
+    locMostrarResultado(data.resultado, jobId);
+  } catch (e) {
+    iaEl.innerHTML = `<span class="loc-naoencontrado">✗ Erro: ${e.message}</span>`;
   }
 }
 
