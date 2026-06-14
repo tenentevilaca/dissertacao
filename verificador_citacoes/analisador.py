@@ -556,6 +556,7 @@ def detectar_capitulos_docx(diss_path: str) -> list[tuple[str, str]] | None:
 # ("1. SOBRENOME, ...") e marcadores de lista ("- Sobrenome, ...").
 _RE_INICIO_NUM = re.compile(r"^(?:[\(\[]?\d+[\.\)\]]|-|•|\*)\s*")
 _RE_REF_AUTOR = re.compile(r"^([A-ZÀ-ÝÇa-zà-ÿ][A-ZÀ-ÝÇa-zà-ÿ\s\-'\.]{1,60}?),")
+_RE_REF_AUTOR_INST = re.compile(r"^([A-ZÀ-Ý][A-ZÀ-Ý\.\s]{1,40}?)\.\s+[A-ZÀ-Ý]")
 _RE_ANO_REF = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
 _RE_CABECALHO_REFS = re.compile(r"^\s*REFER[EÊ]NCIAS(\s+BIBLIOGR[ÁA]FICAS?)?\s*$", re.IGNORECASE)
 
@@ -579,7 +580,7 @@ def parsear_lista_referencias(texto: str) -> list[str]:
         l = _RE_INICIO_NUM.sub("", l).strip()
         if not l:
             continue
-        if _RE_REF_AUTOR.match(l):
+        if _RE_REF_AUTOR.match(l) or _RE_REF_AUTOR_INST.match(l):
             if atual:
                 refs.append(atual.strip())
             atual = l
@@ -592,11 +593,14 @@ def parsear_lista_referencias(texto: str) -> list[str]:
 
 def _extrair_autor_ano_referencia(ref: str) -> tuple[str, str]:
     """Extrai o(s) sobrenome(s) do(s) primeiro(s) autor(es) e o ano de uma referência."""
-    m = _RE_REF_AUTOR.match(ref.strip())
+    m = _RE_REF_AUTOR.match(ref.strip()) or _RE_REF_AUTOR_INST.match(ref.strip())
     autor = m.group(1).strip().rstrip(".") if m else ""
     # Em referências com múltiplos autores, considera só o primeiro sobrenome
     autor = re.split(r"\s*;\s*|\s+E\s+|\s*&\s*", autor)[0].strip()
-    anos = _RE_ANO_REF.findall(ref)
+    # Ignora datas de "Acesso em: dd mmm. AAAA" (data de consulta ao link,
+    # não o ano de publicação da obra)
+    ref_sem_acesso = re.sub(r"Acesso em:?.*$", "", ref, flags=re.IGNORECASE)
+    anos = _RE_ANO_REF.findall(ref_sem_acesso) or _RE_ANO_REF.findall(ref)
     ano = anos[-1] if anos else ""
     return autor, ano
 
@@ -673,11 +677,6 @@ def localizar_referencias(
                 if n_autor == 0:
                     continue
 
-                # Se o ano da referência é conhecido mas NÃO aparece em
-                # lugar nenhum do arquivo, é forte indício de obra errada.
-                if ano and ano not in material[nome_arq]:
-                    continue
-
                 score = 0.0
 
                 # Sinal forte: nome do autor está no PRÓPRIO nome do arquivo
@@ -698,7 +697,7 @@ def localizar_referencias(
                 # não deixar sobrenomes comuns dominarem o ranking)
                 score += min(n_autor, 5)
 
-                if score >= 15:
+                if score >= 14:
                     candidatos.append((score, nome_arq))
 
         candidatos.sort(key=lambda x: x[0], reverse=True)
