@@ -806,10 +806,8 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 log_fn(f"   [{idx}/{total}] lendo {nome}...")
             try:
                 data = z.read(info)
-                if len(data) > 25 * 1024 * 1024:
-                    if log_fn:
-                        log_fn(f"      (ignorado: arquivo de {len(data)/(1024*1024):.1f} MB, acima do limite de 25 MB)")
-                    continue
+                if len(data) > 25 * 1024 * 1024 and log_fn:
+                    log_fn(f"      (arquivo grande: {len(data)/(1024*1024):.1f} MB — extraindo apenas trechos iniciais/finais do PDF)")
                 with ThreadPoolExecutor(max_workers=1) as ex:
                     fut = ex.submit(_ler_bytes, data, ext)
                     try:
@@ -854,12 +852,54 @@ def _ler_bytes(data: bytes, ext: str) -> str:
                     partes.append(_xml_para_texto(z.read("word/footnotes.xml")))
                 return "\n".join(partes)
         elif ext == ".pdf":
-            import fitz
-            doc = fitz.open(stream=data, filetype="pdf")
-            return "\n".join(page.get_text() for page in doc)
+            return _ler_pdf_limitado(data)
     except Exception as e:
         return f"[ERRO ao ler: {e}]"
     return ""
+
+
+_PDF_MAX_CHARS = 200_000
+_PDF_PAGINAS_INICIO = 30
+_PDF_PAGINAS_FIM = 10
+_PDF_LIMITE_BYTES_EXTRACAO_LIMITADA = 25 * 1024 * 1024
+
+
+def _ler_pdf_limitado(data: bytes) -> str:
+    """
+    Extrai texto de um PDF a partir dos bytes em memória.
+
+    Para arquivos grandes (> _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA), em vez de
+    ler o documento inteiro (risco de OOM), extrai apenas as primeiras
+    _PDF_PAGINAS_INICIO páginas (capa/título/início) e as últimas
+    _PDF_PAGINAS_FIM páginas (referências/contracapa) — suficiente para o
+    matching de sobrenome/ano/título em `_buscar_fonte`. Em qualquer caso,
+    o total extraído é limitado a _PDF_MAX_CHARS caracteres.
+    """
+    import fitz
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        n_paginas = doc.page_count
+
+        if len(data) <= _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA:
+            paginas = range(n_paginas)
+        else:
+            inicio = set(range(min(_PDF_PAGINAS_INICIO, n_paginas)))
+            fim = set(range(max(0, n_paginas - _PDF_PAGINAS_FIM), n_paginas))
+            paginas = sorted(inicio | fim)
+
+        partes = []
+        total = 0
+        for i in paginas:
+            texto_pag = doc[i].get_text()
+            partes.append(texto_pag)
+            total += len(texto_pag)
+            if total >= _PDF_MAX_CHARS:
+                break
+
+        texto = "\n".join(partes)
+        return texto[:_PDF_MAX_CHARS]
+    finally:
+        doc.close()
 
 
 def extrair_material_de_zip(zip_source, destino: Path = None) -> dict[str, str]:
