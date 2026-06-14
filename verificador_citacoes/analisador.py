@@ -875,14 +875,16 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 data = z.read(info)
                 if len(data) > 25 * 1024 * 1024 and log_fn:
                     log_fn(f"      (arquivo grande: {len(data)/(1024*1024):.1f} MB — extraindo apenas trechos iniciais/finais do PDF)")
-                with ThreadPoolExecutor(max_workers=1) as ex:
-                    fut = ex.submit(_ler_bytes, data, ext)
-                    try:
-                        texto = fut.result(timeout=60)
-                    except FuturesTimeout:
-                        if log_fn:
-                            log_fn(f"      (ignorado: demorou mais de 60s para extrair)")
-                        continue
+                ex = ThreadPoolExecutor(max_workers=1)
+                fut = ex.submit(_ler_bytes, data, ext)
+                try:
+                    texto = fut.result(timeout=60)
+                except FuturesTimeout:
+                    if log_fn:
+                        log_fn(f"      (ignorado: demorou mais de 60s para extrair)")
+                    ex.shutdown(wait=False)
+                    continue
+                ex.shutdown(wait=False)
                 if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
                     material[nome[:80]] = (texto, data)
                 elif log_fn:
@@ -1008,12 +1010,14 @@ def _ler_pdf_limitado(data: bytes) -> str:
         finally:
             doc.close()
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_extrair)
-        try:
-            return future.result(timeout=_PDF_TIMEOUT_SEGUNDOS)
-        except FuturesTimeout:
-            return "[ERRO: tempo limite excedido ao extrair texto do PDF]"
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_extrair)
+    try:
+        resultado = future.result(timeout=_PDF_TIMEOUT_SEGUNDOS)
+    except FuturesTimeout:
+        resultado = "[ERRO: tempo limite excedido ao extrair texto do PDF]"
+    executor.shutdown(wait=False)
+    return resultado
 
 
 def extrair_material_de_zip(zip_source, destino: Path = None) -> dict[str, str]:

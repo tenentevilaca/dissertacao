@@ -1148,6 +1148,11 @@ async function locIniciar() {
     }
     if (j.status === 'erro') {
       status.textContent = '✗ Erro: ' + (j.resultado?.erro || 'desconhecido');
+      if (j.resultado?.detalhe) {
+        logsEl.style.display = 'block';
+        logsEl.textContent += (logsEl.textContent ? '\n' : '') + j.resultado.detalhe;
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
       return;
     }
     status.textContent = `✓ ${j.resultado.n_referencias} referência(s) verificada(s) em ${j.resultado.n_arquivos} arquivo(s) de apoio.`;
