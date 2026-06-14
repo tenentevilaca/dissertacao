@@ -215,6 +215,7 @@ async def iniciar_localizar_referencias(
         "status": "rodando",
         "tipo": "localizar_referencias",
         "material_bytes": {},
+        "zip_paths": [],
         "material_texto": {},
         "arquivos_relevantes": [],
         "resultado": None,
@@ -283,6 +284,19 @@ async def baixar_material_arquivo(job_id: str, nome_arquivo: str):
         raise HTTPException(404, "Job não encontrado")
     dados = _jobs[job_id].get("material_bytes", {}).get(nome_arquivo)
     if dados is None:
+        import zipfile
+        for zp in _jobs[job_id].get("zip_paths", []):
+            try:
+                with zipfile.ZipFile(zp) as z:
+                    for info in z.infolist():
+                        if Path(info.filename).name[:80] == nome_arquivo:
+                            dados = z.read(info)
+                            break
+            except OSError:
+                continue
+            if dados is not None:
+                break
+    if dados is None:
         raise HTTPException(404, "Arquivo não encontrado")
     from fastapi.responses import Response
     return Response(content=dados, media_type="application/octet-stream", headers={
@@ -330,14 +344,15 @@ def _rodar_localizar_referencias(
         log("📂 Lendo material de apoio…")
         material: dict[str, str] = {}
         material_bytes: dict[str, bytes] = {}
+        zip_paths: list[Path] = []
 
         for mat_path in mat_paths:
             mp = Path(mat_path)
             if mp.suffix.lower() == ".zip":
                 log(f"   Extraindo {mp.name}…")
-                for nome, (texto, dados) in extrair_material_de_zip_com_bytes(mp, log).items():
+                zip_paths.append(mp)
+                for nome, (texto, _dados) in extrair_material_de_zip_com_bytes(mp, log).items():
                     material[nome] = texto
-                    material_bytes[nome] = dados
                     log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
                 texto = ler_arquivo(mp)
@@ -353,16 +368,10 @@ def _rodar_localizar_referencias(
             log("   Baixando material do Google Drive…")
             drive_path, drive_ext = baixar_google_drive_path(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
-                try:
-                    for nome, (texto, dados) in extrair_material_de_zip_com_bytes(drive_path, log).items():
-                        material[nome] = texto
-                        material_bytes[nome] = dados
-                        log(f"   ✓ {nome} ({len(texto):,} chars)")
-                finally:
-                    try:
-                        drive_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                zip_paths.append(drive_path)
+                for nome, (texto, _dados) in extrair_material_de_zip_com_bytes(drive_path, log).items():
+                    material[nome] = texto
+                    log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
                 drive_bytes = drive_path.read_bytes()
                 try:
@@ -375,6 +384,7 @@ def _rodar_localizar_referencias(
                     material[nome] = texto
                     material_bytes[nome] = drive_bytes
                     log(f"   ✓ {nome} ({len(texto):,} chars)")
+
 
         log(f"   {len(material)} arquivo(s) de apoio lido(s)")
 
@@ -394,6 +404,7 @@ def _rodar_localizar_referencias(
         })
 
         _jobs[job_id]["material_bytes"] = material_bytes
+        _jobs[job_id]["zip_paths"] = [str(p) for p in zip_paths]
         _jobs[job_id]["material_texto"] = material
         _jobs[job_id]["arquivos_relevantes"] = arquivos_relevantes
         _jobs[job_id]["resultado"] = {
@@ -545,6 +556,11 @@ async def limpar_job(job_id: str):
         tmpdir = _jobs[job_id].get("tmpdir")
         if tmpdir and Path(tmpdir).exists():
             shutil.rmtree(tmpdir, ignore_errors=True)
+        for zp in _jobs[job_id].get("zip_paths", []):
+            try:
+                Path(zp).unlink(missing_ok=True)
+            except OSError:
+                pass
         del _jobs[job_id]
     return {"ok": True}
 
