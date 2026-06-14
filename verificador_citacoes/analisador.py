@@ -605,6 +605,22 @@ def _extrair_autor_ano_referencia(ref: str) -> tuple[str, str]:
     return autor, ano
 
 
+_RE_REF_IN_ORGANIZADOR = re.compile(r"\bIn:\s*([A-ZÀ-ÝÇ][A-ZÀ-ÝÇ\s\-'\.]{1,40}?),")
+
+
+def _extrair_organizador_referencia(ref: str) -> str:
+    """
+    Em referências de capítulo ("AUTOR. Título do capítulo. In: ORGANIZADOR
+    (org.). Título da obra. ..."), o arquivo de apoio normalmente está
+    catalogado pelo nome da obra/organizador, não pelo autor do capítulo.
+    Retorna o sobrenome do organizador, se houver um trecho "In: SOBRENOME,".
+    """
+    m = _RE_REF_IN_ORGANIZADOR.search(ref)
+    if not m:
+        return ""
+    return m.group(1).strip().rstrip(".")
+
+
 _PROMPT_DESAMBIGUAR_REF = """Você está ajudando a localizar, entre arquivos de apoio de uma dissertação, qual arquivo corresponde a uma determinada referência bibliográfica.
 
 REFERÊNCIA: {referencia}
@@ -670,8 +686,13 @@ def localizar_referencias(
         autor, ano = _extrair_autor_ano_referencia(ref)
         candidatos: list[tuple[float, str]] = []
 
-        if autor:
-            autor_low = autor.lower()
+        autores_busca = [autor] if autor else []
+        organizador = _extrair_organizador_referencia(ref)
+        if organizador and organizador.lower() != autor.lower():
+            autores_busca.append(organizador)
+
+        for autor_busca in autores_busca:
+            autor_low = autor_busca.lower()
             for nome_arq, texto_low in materiais_lower.items():
                 n_autor = texto_low.count(autor_low)
                 if n_autor == 0:
@@ -699,6 +720,14 @@ def localizar_referencias(
 
                 if score >= 14:
                     candidatos.append((score, nome_arq))
+
+        # Dedup: mantém apenas a melhor pontuação por arquivo (um mesmo
+        # arquivo pode ter pontuado tanto pelo autor quanto pelo organizador).
+        melhor_por_arquivo: dict[str, float] = {}
+        for score, nome_arq in candidatos:
+            if score > melhor_por_arquivo.get(nome_arq, -1):
+                melhor_por_arquivo[nome_arq] = score
+        candidatos = [(score, nome_arq) for nome_arq, score in melhor_por_arquivo.items()]
 
         candidatos.sort(key=lambda x: x[0], reverse=True)
 
