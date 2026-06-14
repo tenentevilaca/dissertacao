@@ -605,6 +605,32 @@ def _extrair_autor_ano_referencia(ref: str) -> tuple[str, str]:
     return autor, ano
 
 
+def _normalizar_palavra(p: str) -> str:
+    """Remove acentos para comparar com nomes de arquivo (geralmente sem acento)."""
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", p)
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def _extrair_palavras_titulo_referencia(ref: str) -> list[str]:
+    """
+    Extrai palavras significativas do TÍTULO da referência (após o autor,
+    até "In:" ou o próximo ponto de dados de publicação), para comparar com
+    o nome do arquivo — útil quando o arquivo é nomeado pelo título da obra/
+    capítulo em vez de pelo autor (comum em capítulos de coletâneas).
+    """
+    m = _RE_REF_AUTOR.match(ref.strip()) or _RE_REF_AUTOR_INST.match(ref.strip())
+    resto = ref[m.end():] if m else ref
+    # Considera só até "In:" (organizador/obra) ou o primeiro ponto seguido
+    # de local/editora — aqui, simplificadamente, até "In:" se houver.
+    resto = re.split(r"\bIn:\s", resto)[0]
+    palavras = [
+        _normalizar_palavra(p) for p in re.findall(r"[a-záéíóúâêîôûãõàçü]{4,}", resto.lower())
+        if p not in _STOPWORDS_PT
+    ]
+    return palavras[:12]
+
+
 _RE_REF_IN_ORGANIZADOR = re.compile(r"\bIn:\s*([A-ZÀ-ÝÇ][A-ZÀ-ÝÇ\s\-'\.]{1,40}?),")
 
 
@@ -720,6 +746,22 @@ def localizar_referencias(
 
                 if score >= 14:
                     candidatos.append((score, nome_arq))
+
+        # Sinal alternativo: capítulos/coletâneas às vezes têm o arquivo
+        # nomeado pelo TÍTULO do capítulo (não pelo autor/organizador).
+        # Compara as palavras do título da referência com as palavras do
+        # nome do arquivo.
+        if not candidatos:
+            titulo_palavras = set(_extrair_palavras_titulo_referencia(ref))
+            if titulo_palavras:
+                for nome_arq in materiais_lower:
+                    nome_palavras = {
+                        _normalizar_palavra(p)
+                        for p in re.findall(r"[a-z]{4,}", Path(nome_arq).stem.lower())
+                    }
+                    intersecao = titulo_palavras & nome_palavras
+                    if len(intersecao) >= 3:
+                        candidatos.append((10 + 5 * len(intersecao), nome_arq))
 
         # Dedup: mantém apenas a melhor pontuação por arquivo (um mesmo
         # arquivo pode ter pontuado tanto pelo autor quanto pelo organizador).
