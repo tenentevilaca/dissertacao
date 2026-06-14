@@ -776,6 +776,7 @@ input:focus { outline: none; border-color: var(--azul2); background: #fff; }
     <div id="loc-status" class="loc-status"></div>
     <div id="loc-logs" class="log-box" style="display:none;max-height:240px;overflow-y:auto;margin-top:10px;"></div>
     <div id="loc-import" style="margin-top:8px;"></div>
+    <div class="download-row" id="loc-download-row"></div>
     <div id="loc-resultado" style="margin-top:16px;"></div>
   </div>
 </div><!-- /modo-localizador -->
@@ -1173,6 +1174,15 @@ function locMostrarResultado(resultado, jobId) {
   }
   html += '</table>';
   el.innerHTML = html;
+
+  document.getElementById('loc-download-row').innerHTML = `
+    <a class="dl-btn dl-html" href="/relatorio-localizar/${jobId}/html" download>
+      🌐 Relatório HTML
+    </a>
+    <a class="dl-btn dl-json" href="/relatorio-localizar/${jobId}/json" download>
+      { } JSON
+    </a>
+  `;
 
   const importEl = document.getElementById('loc-import');
   if (resultado.n_arquivos_relevantes > 0) {

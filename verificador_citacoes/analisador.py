@@ -776,6 +776,73 @@ def localizar_referencias(
     return resultados
 
 
+def gerar_relatorio_localizar(resultado: dict, rel_dir: Path) -> None:
+    """
+    Gera um relatório HTML simples com o resultado da busca "Localizar
+    Referências": uma tabela Referência | Arquivo(s) encontrado(s).
+    """
+    from datetime import datetime
+    import html as _html
+
+    def _esc_loc(s) -> str:
+        return _html.escape(str(s or ""), quote=False)
+
+    rel_dir = Path(rel_dir)
+    rel_dir.mkdir(parents=True, exist_ok=True)
+
+    itens = resultado.get("itens") or []
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    linhas = []
+    for item in itens:
+        ref = _esc_loc(item.get("referencia"))
+        arquivos = item.get("arquivos") or []
+        if arquivos:
+            cel = "<br>".join(_esc_loc(a) for a in arquivos)
+        else:
+            cel = '<span class="naoencontrado">— não encontrado —</span>'
+        linhas.append(f"<tr><td>{ref}</td><td>{cel}</td></tr>")
+
+    n_total = resultado.get("n_referencias", len(itens))
+    n_encontrados = sum(1 for item in itens if item.get("arquivos"))
+
+    html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Localizar Referências — Relatório</title>
+<style>
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; padding: 24px; color: #1a1a1a; }}
+h1 {{ font-size: 1.4rem; margin-bottom: 4px; }}
+.meta {{ color: #666; font-size: 0.9rem; margin-bottom: 16px; }}
+table {{ width: 100%; border-collapse: collapse; }}
+th, td {{ border: 1px solid #ddd; padding: 8px 10px; text-align: left; vertical-align: top; font-size: 0.92rem; }}
+th {{ background: #f5f5f5; }}
+.naoencontrado {{ color: #b00; font-style: italic; }}
+.resumo {{ margin-bottom: 14px; font-size: 0.95rem; }}
+</style>
+</head>
+<body>
+<h1>Localizar Referências — Relatório</h1>
+<div class="meta">Gerado em {ts}</div>
+<div class="resumo">{n_encontrados} de {n_total} referência(s) com arquivo de apoio encontrado.</div>
+<table>
+<tr><th>Referência</th><th>Arquivo(s) encontrado(s)</th></tr>
+{''.join(linhas)}
+</table>
+</body>
+</html>"""
+
+    (rel_dir / "relatorio_localizar.html").write_text(html, encoding="utf-8")
+
+    resultado_json = {k: v for k, v in resultado.items() if not k.startswith("_")}
+    (rel_dir / "relatorio_localizar.json").write_text(
+        json.dumps(resultado_json, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tuple[str, bytes]]:
     """
     Como `extrair_material_de_zip`, mas também retorna os bytes originais de

@@ -254,6 +254,29 @@ async def status_localizar_referencias(job_id: str):
     return {"status": job["status"], "resultado": job.get("resultado"), "logs": job.get("logs", [])}
 
 
+@app.get("/relatorio-localizar/{job_id}/{formato}")
+async def baixar_relatorio_localizar(job_id: str, formato: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "Job não encontrado")
+    rel_dir = _jobs[job_id].get("relatorio_dir")
+    if not rel_dir:
+        raise HTTPException(400, "Relatório ainda não gerado")
+
+    nomes = {"html": "relatorio_localizar.html", "json": "relatorio_localizar.json"}
+    if formato not in nomes:
+        raise HTTPException(400, "Formato inválido")
+
+    caminho = Path(rel_dir) / nomes[formato]
+    if not caminho.exists():
+        raise HTTPException(404, "Arquivo não encontrado")
+
+    return FileResponse(
+        caminho,
+        filename=nomes[formato],
+        media_type="text/html" if formato == "html" else "application/octet-stream",
+    )
+
+
 @app.get("/material-arquivo/{job_id}/{nome_arquivo}")
 async def baixar_material_arquivo(job_id: str, nome_arquivo: str):
     if job_id not in _jobs:
@@ -283,6 +306,7 @@ def _rodar_localizar_referencias(
             parsear_lista_referencias,
             localizar_referencias,
             extrair_material_de_zip_com_bytes,
+            gerar_relatorio_localizar,
             baixar_google_drive_bytes,
             baixar_google_drive_path,
             _ler_bytes as _ler_bytes_apoio,
@@ -378,6 +402,11 @@ def _rodar_localizar_referencias(
             "n_arquivos": len(material),
             "n_arquivos_relevantes": len(arquivos_relevantes),
         }
+
+        rel_dir = Path(_jobs[job_id]["tmpdir"]) / "relatorio"
+        gerar_relatorio_localizar(_jobs[job_id]["resultado"], rel_dir)
+        _jobs[job_id]["relatorio_dir"] = str(rel_dir)
+
         _jobs[job_id]["status"] = "concluido"
 
     except Exception as exc:
