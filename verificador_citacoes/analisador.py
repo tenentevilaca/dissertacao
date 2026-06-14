@@ -925,10 +925,12 @@ def _ler_bytes(data: bytes, ext: str) -> str:
     return ""
 
 
-_PDF_MAX_CHARS = 200_000
+_PDF_MAX_CHARS = 400_000
 _PDF_PAGINAS_INICIO = 30
 _PDF_PAGINAS_FIM = 10
 _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA = 25 * 1024 * 1024
+_PDF_SLICE_MEIO_CHARS = 300
+_PDF_TIMEOUT_SEGUNDOS = 60
 
 
 def _ler_pdf_limitado(data: bytes) -> str:
@@ -936,37 +938,81 @@ def _ler_pdf_limitado(data: bytes) -> str:
     Extrai texto de um PDF a partir dos bytes em memória.
 
     Para arquivos grandes (> _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA), em vez de
-    ler o documento inteiro (risco de OOM), extrai apenas as primeiras
-    _PDF_PAGINAS_INICIO páginas (capa/título/início) e as últimas
-    _PDF_PAGINAS_FIM páginas (referências/contracapa) — suficiente para o
-    matching de sobrenome/ano/título em `_buscar_fonte`. Em qualquer caso,
-    o total extraído é limitado a _PDF_MAX_CHARS caracteres.
+    ler o documento inteiro (risco de OOM), extrai:
+      - o sumário/TOC (`doc.get_toc()`), quando presente — em coletâneas/anais
+        as entradas do sumário costumam trazer títulos de capítulo e, por
+        vezes, nomes de autores;
+      - texto completo das primeiras _PDF_PAGINAS_INICIO páginas (capa/título/
+        início) e das últimas _PDF_PAGINAS_FIM páginas (referências/contracapa);
+      - para todas as demais páginas, apenas os primeiros
+        _PDF_SLICE_MEIO_CHARS caracteres de cada página — onde tipicamente
+        aparecem cabeçalhos de capítulo e nomes de autores em coletâneas —,
+        de forma bem mais barata que a extração completa, mas cobrindo a
+        estrutura do documento inteiro.
+
+    Isso ajuda o matching de sobrenome/ano/título em `_buscar_fonte` mesmo
+    quando o capítulo relevante está no meio de um PDF grande (coletânea).
+    Em qualquer caso, o total extraído é limitado a _PDF_MAX_CHARS caracteres,
+    e a extração é protegida por um timeout de _PDF_TIMEOUT_SEGUNDOS.
     """
     import fitz
-    doc = fitz.open(stream=data, filetype="pdf")
-    try:
-        n_paginas = doc.page_count
 
-        if len(data) <= _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA:
-            paginas = range(n_paginas)
-        else:
+    def _extrair() -> str:
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            n_paginas = doc.page_count
+
+            if len(data) <= _PDF_LIMITE_BYTES_EXTRACAO_LIMITADA:
+                partes = []
+                total = 0
+                for i in range(n_paginas):
+                    texto_pag = doc[i].get_text()
+                    partes.append(texto_pag)
+                    total += len(texto_pag)
+                    if total >= _PDF_MAX_CHARS:
+                        break
+                return "\n".join(partes)[:_PDF_MAX_CHARS]
+
             inicio = set(range(min(_PDF_PAGINAS_INICIO, n_paginas)))
             fim = set(range(max(0, n_paginas - _PDF_PAGINAS_FIM), n_paginas))
-            paginas = sorted(inicio | fim)
+            extremos = inicio | fim
+            meio = sorted(set(range(n_paginas)) - extremos)
 
-        partes = []
-        total = 0
-        for i in paginas:
-            texto_pag = doc[i].get_text()
-            partes.append(texto_pag)
-            total += len(texto_pag)
-            if total >= _PDF_MAX_CHARS:
-                break
+            partes = []
 
-        texto = "\n".join(partes)
-        return texto[:_PDF_MAX_CHARS]
-    finally:
-        doc.close()
+            # 1. Sumário/TOC (capítulos e, possivelmente, autores)
+            try:
+                toc = doc.get_toc()
+            except Exception:
+                toc = []
+            if toc:
+                linhas_toc = [str(entrada[1]) for entrada in toc if len(entrada) > 1]
+                if linhas_toc:
+                    partes.append("\n".join(linhas_toc))
+
+            # 2. Primeiras páginas, texto completo
+            for i in sorted(inicio):
+                partes.append(doc[i].get_text())
+
+            # 3. Páginas do meio: apenas um pequeno trecho inicial de cada
+            for i in meio:
+                partes.append(doc[i].get_text()[:_PDF_SLICE_MEIO_CHARS])
+
+            # 4. Últimas páginas, texto completo
+            for i in sorted(fim):
+                partes.append(doc[i].get_text())
+
+            texto = "\n".join(partes)
+            return texto[:_PDF_MAX_CHARS]
+        finally:
+            doc.close()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_extrair)
+        try:
+            return future.result(timeout=_PDF_TIMEOUT_SEGUNDOS)
+        except FuturesTimeout:
+            return "[ERRO: tempo limite excedido ao extrair texto do PDF]"
 
 
 def extrair_material_de_zip(zip_source, destino: Path = None) -> dict[str, str]:
