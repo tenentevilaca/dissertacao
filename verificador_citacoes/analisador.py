@@ -806,6 +806,10 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 log_fn(f"   [{idx}/{total}] lendo {nome}...")
             try:
                 data = z.read(info)
+                if len(data) > 25 * 1024 * 1024:
+                    if log_fn:
+                        log_fn(f"      (ignorado: arquivo de {len(data)/(1024*1024):.1f} MB, acima do limite de 25 MB)")
+                    continue
                 with ThreadPoolExecutor(max_workers=1) as ex:
                     fut = ex.submit(_ler_bytes, data, ext)
                     try:
