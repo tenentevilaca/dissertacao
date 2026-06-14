@@ -396,7 +396,7 @@ def _rodar_localizar_referencias(
                 else:
                     log(f"   ✗ {mp.name} — não foi possível ler")
 
-        if not mat_paths and drive_url:
+        if drive_url:
             log("   Baixando material do Google Drive…")
             drive_path, drive_ext = baixar_google_drive_path(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
