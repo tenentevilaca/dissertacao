@@ -842,18 +842,18 @@ th {{ background: #f5f5f5; }}
     )
 
 
-def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tuple[str, bytes]]:
+def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, str]:
     """
-    Como `extrair_material_de_zip`, mas também retorna os bytes originais de
-    cada arquivo (para permitir download direto pelo nome do arquivo).
-    Retorna dict nome_arquivo → (texto, bytes).
+    Como `extrair_material_de_zip`, mas lendo membro a membro de um zip.
+    Os bytes originais NÃO são retidos em memória — para download, use
+    `zip_paths` e extraia sob demanda. Retorna dict nome_arquivo → texto.
     """
     if isinstance(zip_source, (str, Path)):
         zip_arg = Path(zip_source)
     else:
         zip_arg = io.BytesIO(zip_source)
 
-    material: dict[str, tuple[str, bytes]] = {}
+    material: dict[str, str] = {}
 
     with zipfile.ZipFile(zip_arg) as z:
         membros = [
@@ -875,8 +875,9 @@ def extrair_material_de_zip_com_bytes(zip_source, log_fn=None) -> dict[str, tupl
                 if len(data) > 25 * 1024 * 1024 and log_fn:
                     log_fn(f"      (arquivo grande: {len(data)/(1024*1024):.1f} MB — extraindo apenas trechos iniciais/finais do PDF)")
                 texto = _ler_bytes(data, ext)
+                del data
                 if texto and len(texto) > 100 and not texto.startswith("[ERRO"):
-                    material[nome[:80]] = (texto, data)
+                    material[nome[:80]] = texto
                 elif log_fn:
                     log_fn(f"      (ignorado: sem texto extraível)")
             except Exception as e:

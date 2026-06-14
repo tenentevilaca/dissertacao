@@ -14,6 +14,8 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Optional
+import io
+from analisador import EXTENSOES_APOIO
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -351,7 +353,7 @@ def _rodar_localizar_referencias(
             if mp.suffix.lower() == ".zip":
                 log(f"   Extraindo {mp.name}…")
                 zip_paths.append(mp)
-                for nome, (texto, _dados) in extrair_material_de_zip_com_bytes(mp, log).items():
+                for nome, texto in extrair_material_de_zip_com_bytes(mp, log).items():
                     material[nome] = texto
                     log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
@@ -369,7 +371,7 @@ def _rodar_localizar_referencias(
             drive_path, drive_ext = baixar_google_drive_path(drive_url, log_fn=log)
             if drive_ext.lower() == ".zip":
                 zip_paths.append(drive_path)
-                for nome, (texto, _dados) in extrair_material_de_zip_com_bytes(drive_path, log).items():
+                for nome, texto in extrair_material_de_zip_com_bytes(drive_path, log).items():
                     material[nome] = texto
                     log(f"   ✓ {nome} ({len(texto):,} chars)")
             else:
@@ -436,7 +438,7 @@ async def iniciar_analise(
     sem_verificacao: str = Form("false"),
     material_localizado_job_id: str = Form(""),
 ):
-    from analisador import extrair_material_de_zip_com_bytes, baixar_google_drive_bytes, baixar_google_drive_path
+    from analisador import baixar_google_drive_bytes, baixar_google_drive_path
 
     job_id = str(uuid.uuid4())
     tmpdir = tempfile.mkdtemp(prefix=f"citverif_{job_id}_")
@@ -467,8 +469,17 @@ async def iniciar_analise(
     def _salvar_referencia(nome: str, dados, from_path: bool = False):
         suffix = Path(nome).suffix.lower()
         if suffix == ".zip":
-            for sub_nome, (_texto, sub_dados) in extrair_material_de_zip_com_bytes(dados, log).items():
-                (refs_dir / sub_nome).write_bytes(sub_dados)
+            import zipfile as _zipfile
+            zip_arg = dados if isinstance(dados, (str, Path)) else io.BytesIO(dados)
+            with _zipfile.ZipFile(zip_arg) as z:
+                for info in z.infolist():
+                    sub_nome = Path(info.filename).name
+                    if (
+                        not sub_nome.startswith("~$")
+                        and not info.is_dir()
+                        and Path(sub_nome).suffix.lower() in EXTENSOES_APOIO
+                    ):
+                        (refs_dir / sub_nome).write_bytes(z.read(info))
             if from_path:
                 try:
                     Path(dados).unlink(missing_ok=True)
